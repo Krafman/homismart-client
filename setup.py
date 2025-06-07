@@ -50,7 +50,8 @@ setup(
     #     └── ... (other .py files)
 
     install_requires=[
-        "websockets>=10.0", # Specify a version range for the websockets library
+        "websockets>=10.0",
+        "python-dotenv>=1.0.0", # Specify a version range for the websockets library
                             # Check latest stable, e.g., >=10.0, <13.0
     ],
     python_requires=">=3.8", # Based on asyncio features and type hinting
