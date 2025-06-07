@@ -8,7 +8,8 @@ def get_version(package_name):
     """
     Return package version as listed in `__version__` in `__init__.py`.
     """
-    init_py = open(os.path.join(package_name, '__init__.py')).read()
+    here = os.path.abspath(os.path.dirname(__file__))
+    init_py = open(os.path.join(here, package_name, '__init__.py')).read()
     return re.search("__version__ = ['\"]([^'\"]+)['\"]", init_py).group(1)
 
 def get_long_description():
