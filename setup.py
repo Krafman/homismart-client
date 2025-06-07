@@ -27,14 +27,14 @@ version = get_version("homismart_client") # Assumes your package directory is 'h
 setup(
     name="homismart-client",
     version=version,
-    author="Your Name / Alias", # Replace with your name or alias
-    author_email="your_email@example.com", # Replace with your email
+    author="Adir Krafman", # Replace with your name or alias
+    author_email="adirkrafman@gmail.com", # Replace with your email
     description="Python client for Homismart WebSocket API",
     long_description=get_long_description(),
     long_description_content_type="text/markdown",
-    url="https://github.com/your_username/homismart-client", # Replace with your project's URL
+    url="https://github.com/krafman/homismart-client", # Replace with your project's URL
     project_urls={
-        "Bug Tracker": "https://github.com/your_username/homismart-client/issues", # Replace
+        "Bug Tracker": "https://github.com/krafman/homismart-client/issues", # Replace
     },
     license="MIT",  # Or choose another license like Apache 2.0, etc.
     packages=find_packages(exclude=['tests*', 'examples*']),
