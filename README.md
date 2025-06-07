@@ -1,5 +1,11 @@
 # Homismart Client (Unofficial Python Library)
 
+![PyPI - Version](https://img.shields.io/pypi/v/homismart-client)
+![Python Versions](https://img.shields.io/pypi/pyversions/homismart-client)
+![License](https://img.shields.io/pypi/l/homismart-client)
+![GitHub stars](https://img.shields.io/github/stars/krafman/homismart-client?style=social)
+![GitHub last commit](https://img.shields.io/github/last-commit/krafman/homismart-client)
+
 > ⚠️ **Disclaimer**: This is an unofficial, community-driven library. It is not affiliated with, authorized, or endorsed by Homismart or its parent company. Use at your own risk — changes to Homismart's API may break functionality without notice.
 
 A Python library for interacting with Homismart smart home devices via their WebSocket API. This client was developed by reverse-engineering the protocol used by the official Homismart web application.
@@ -98,5 +104,6 @@ This project is currently in **Alpha**. The protocol is still being reverse-engi
 - `python-dotenv>=1.0.0`
 
 ## License
+[![forthebadge](https://forthebadge.com/images/badges/license-mit.svg)](https://forthebadge.com)
 
 MIT © Adir Krafman
