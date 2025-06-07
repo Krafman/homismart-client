@@ -78,7 +78,7 @@ from .enums import (
 
 # Version of the homismart_client package.
 # This is often read by setup.py.
-__version__ = "0.1.2" # Initialize with your starting version
+__version__ = "0.1.3" # Initialize with your starting version
 
 # Configure a NullHandler for the library's root logger.
 # This is crucial for libraries to prevent "No handler found" warnings
