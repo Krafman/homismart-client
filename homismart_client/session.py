@@ -109,12 +109,27 @@ class HomismartSession:
     def _emit_event(self, event_name: str, *args: Any) -> None:
         """Emits an event, calling all registered listeners."""
         if event_name in self._event_listeners:
-            logger.debug(f"Emitting event '{event_name}' with args: {args}")
-            for callback in self._event_listeners[event_name]:
+            logger.debug("Emitting event '%s' with args: %s", event_name, args)
+            # Iterate over a copy of the list in case a listener modifies the original list.
+            for callback in list(self._event_listeners[event_name]):
+                # *** FIX #1: Add a safeguard to ensure the callback is actually callable. ***
+                if not callable(callback):
+                    logger.error(
+                        "Found a non-callable item in listeners for event '%s': %s",
+                        event_name,
+                        callback
+                    )
+                    continue
                 try:
                     callback(*args)
                 except Exception as e:
-                    logger.error(f"Error in event listener for '{event_name}' ({callback}): {e}", exc_info=True)
+                    logger.error(
+                        "Error in event listener for '%s' (%s): %s",
+                        event_name,
+                        callback,
+                        e,
+                        exc_info=True,
+                    )
 
     def dispatch_message(self, prefix_str: str, data: Dict[str, Any]) -> None:
         """
@@ -138,25 +153,29 @@ class HomismartSession:
 
     def _handle_login_response(self, data: Dict[str, Any]) -> None:
         """Handles the "0003" login response."""
-        logger.info(f"Handling login response: {data}")
+        logger.info("Handling login response: %s", data)
         if data.get("result") is True:
-            self._client._is_logged_in = True # Should be managed by client
-            logger.info(f"Login successful for user: {data.get('username', 'N/A')}")
-            self._emit_event("session_authenticated", data.get('username'))
-            # After successful login, client should request device list
+            self._client._is_logged_in = True
+            # *** FIX #2: Use the username stored in the client, as the server doesn't return it. ***
+            username = self._client._username
+            logger.info("Login successful for user: %s", username)
+            # Pass the correct username to the event.
+            self._emit_event("session_authenticated", username)
             self._client._schedule_task(self._client._request_device_list())
-            # Handle terms and conditions if necessary
-            if data.get("shouldConfirmTerms") == 1 and hasattr(self._client, '_accept_terms_and_conditions'):
-                 logger.info("Terms and conditions need to be accepted.")
-                 self._client._schedule_task(self._client._accept_terms_and_conditions())
-
+            if data.get("shouldConfirmTerms") == 1 and hasattr(
+                self._client, "_accept_terms_and_conditions"
+            ):
+                logger.info("Terms and conditions need to be accepted.")
+                self._client._schedule_task(self._client._accept_terms_and_conditions())
         else:
             self._client._is_logged_in = False
             error_msg = f"Authentication failed. Server response: {data}"
             logger.error(error_msg)
-            # We don't have a specific server error code here, so create a generic auth error
             auth_exception = AuthenticationError(error_msg)
-            self._emit_event("session_error", {"type": "authentication_failed", "data": data, "exception": auth_exception})
+            self._emit_event(
+                "session_error",
+                {"type": "authentication_failed", "data": data, "exception": auth_exception},
+            )
             # Optionally, raise AuthenticationError if the client should handle it immediately
             # raise auth_exception
 
