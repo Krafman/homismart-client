@@ -7,15 +7,14 @@ that can be opened, closed, stopped, or set to a specific level.
 import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
-# Import the base and switchable device classes.
-# In a package structure, this would be:
-# from .base_device import HomismartDevice # Not directly used, but SwitchableDevice inherits it
-# from .switchable import SwitchableDevice
+# Import the base device class.
+# In a package structure, this would simply be:
+# from .base_device import HomismartDevice
 try:
-    from .switchable import SwitchableDevice
+    from .base_device import HomismartDevice
 except ImportError:
     # Fallback for scenarios where the relative import might not work immediately
-    from switchable import SwitchableDevice # Assumes switchable.py is in the same path
+    from base_device import HomismartDevice  # type: ignore
 
 if TYPE_CHECKING:
     from ..session import HomismartSession
@@ -31,12 +30,12 @@ CURTAIN_STATE_STOP = "99" # Observed in JS as a potential stop command or defaul
 CURTAIN_STATE_OPEN_PERCENT = 0 # Typically, 0% means fully open for many systems
 CURTAIN_STATE_CLOSED_PERCENT = 100 # Typically, 100% means fully closed
 
-class CurtainDevice(SwitchableDevice):
+class CurtainDevice(HomismartDevice):
     """
     Represents a curtain or shutter device.
-    Inherits from SwitchableDevice, as curtains might also have a general 'power'
-    concept or simply to reuse the command execution structure.
-    The primary control is via 'curtainState'.
+    Inherits directly from :class:`HomismartDevice`.
+    Curtain devices are not treated as switchable devices; their
+    main control property is ``curtainState`` rather than ``power``.
     """
 
     def __init__(self, session: 'HomismartSession', initial_data: Dict[str, Any]):
@@ -172,7 +171,7 @@ if __name__ == '__main__':
     # This example is conceptual as it requires a mock session, client, and event loop.
     import asyncio
 
-    class MockHomismartSession: # Copied from SwitchableDevice for standalone testing
+    class MockHomismartSession:  # Minimal session stub for the example
         def _get_device_type_enum_from_code(self, code): return code
         def _notify_device_update(self, device): pass
         async def _send_command_for_device(self, device_id, command_type, command_payload):
