@@ -83,6 +83,16 @@ class HomismartDevice:
         return bool(self._raw_data.get("onLine", False))
 
     @property
+    def is_on(self) -> bool:
+        """Returns True if the device is powered on, False otherwise."""
+        return bool(self._raw_data.get("power", False))
+
+    @property
+    def led_state(self) -> Optional[int]:
+        """Returns the LED state/percentage for the device if available."""
+        return cast(Optional[int], self._raw_data.get("led"))
+
+    @property
     def shared(self) -> bool:
         """Returns True if the device is a shared device."""
         return bool(self._raw_data.get("shared", False))
@@ -231,6 +241,25 @@ class HomismartDevice:
             raise ValueError("Icon ID must be a string.")
         logger.info(f"Device {self.id} ('{self.name}'): Attempting to set icon ID to '{icon_id}'.")
         await self._execute_modify_command(icon_id=icon_id)
+
+    async def set_led_state(self, led_percentage: int) -> None:
+        """Sets the LED indicator percentage for the device via the "0030" command."""
+        if not (0 <= led_percentage <= 100):
+            logger.error(
+                f"Device {self.id}: Invalid LED percentage '{led_percentage}'. Must be 0-100."
+            )
+            raise ValueError("LED percentage must be between 0 and 100.")
+
+        logger.info(
+            f"Device {self.id} ('{self.name}'): Attempting to set LED state to {led_percentage}%."
+        )
+
+        led_payload = {"devid": self.id, "ledDevice": led_percentage}
+        await self._session._send_command_for_device(
+            device_id=self.id,
+            command_type="modify_led",
+            command_payload=led_payload,
+        )
 
     async def delete(self) -> None:
         """

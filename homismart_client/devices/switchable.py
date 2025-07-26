@@ -38,21 +38,6 @@ class SwitchableDevice(HomismartDevice):
         super().__init__(session, initial_data)
         logger.debug(f"SwitchableDevice initialized: ID='{self.id}', Name='{self.name}'")
 
-    @property
-    def is_on(self) -> bool:
-        """
-        Returns True if the device is currently powered on, False otherwise.
-        Based on the 'power' field in raw_data.
-        """
-        return bool(self._raw_data.get("power", False))
-
-    @property
-    def led_state(self) -> Optional[int]:
-        """
-        Returns the current LED state/percentage of the device, if available.
-        Based on the 'led' field in raw_data.
-        """
-        return cast(Optional[int], self._raw_data.get("led"))
 
     async def turn_on(self) -> None:
         """
@@ -90,32 +75,6 @@ class SwitchableDevice(HomismartDevice):
         else:
             await self.turn_on()
 
-    async def set_led_state(self, led_percentage: int) -> None:
-        """
-        Sets the LED indicator state/percentage for the device.
-        This uses the "0030" MODIFY_LED command.
-
-        Args:
-            led_percentage: The desired LED state (e.g., 0-100).
-                            The exact meaning (brightness, on/off) might vary.
-        """
-        if not (0 <= led_percentage <= 100):
-            logger.error(f"Device {self.id}: Invalid LED percentage '{led_percentage}'. Must be 0-100.")
-            raise ValueError("LED percentage must be between 0 and 100.")
-
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to set LED state to {led_percentage}%.")
-        
-        # Payload for "0030" (MODIFY_LED) is {"devid": self.id, "ledDevice": led_percentage}
-        # as seen in SocketFunctions.modifyLed
-        led_payload = {
-            "devid": self.id,
-            "ledDevice": led_percentage
-        }
-        await self._session._send_command_for_device(
-            device_id=self.id,
-            command_type="modify_led", # Session will map this to RequestPrefix.MODIFY_LED
-            command_payload=led_payload
-        )
 
     def __repr__(self) -> str:
         return (f"<SwitchableDevice(id='{self.id}', name='{self.name}', "
