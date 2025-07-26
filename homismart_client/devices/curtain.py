@@ -5,6 +5,7 @@ Defines the CurtainDevice class, representing devices like curtains and shutters
 that can be opened, closed, stopped, or set to a specific level.
 """
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 # Import the base device class.
