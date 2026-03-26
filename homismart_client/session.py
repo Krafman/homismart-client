@@ -184,13 +184,13 @@ class HomismartSession:
         logger.info("Handling login response: %s", data)
         if data.get("result") is True:
             self._client._is_logged_in = True
+            self._client._reconnect_attempt = 0  # Reset backoff on successful login
+            self._client._login_event.set()       # Unblock connect() / _open_and_login()
             username = self._client._username
             logger.info("Login successful for user: %s", username)
             self._emit_event("session_authenticated", username)
             self._client._schedule_task(self._client._request_device_list())
-            if data.get("shouldConfirmTerms") == 1 and hasattr(
-                self._client, "_accept_terms_and_conditions"
-            ):
+            if data.get("shouldConfirmTerms") == 1:
                 logger.info("Terms and conditions need to be accepted.")
                 self._client._schedule_task(self._client._accept_terms_and_conditions())
         else:

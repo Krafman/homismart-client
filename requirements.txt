@@ -1,2 +1,2 @@
 python-dotenv>=1.0.0
-websockets>=10.0,<13.0
+websockets>=13.0
