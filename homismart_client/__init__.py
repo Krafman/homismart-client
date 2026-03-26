@@ -1,4 +1,4 @@
-# homismart_client/homismart_client/__init__.py
+# homismart_client/__init__.py
 """
 Homismart Client Library
 ~~~~~~~~~~~~~~~~~~~~~~
@@ -21,7 +21,7 @@ Usage:
     ...         await asyncio.sleep(10) # Example: allow time for connection and device discovery
     ...         if client.session:
     ...             print(f"Connected! Found {len(client.session.get_all_devices())} devices.")
-    ...             for device_id, device in client.session.get_all_devices().items():
+    ...             for device in client.session.get_all_devices():
     ...                 print(f"  - {device}")
     ...     except AuthenticationError:
     ...         print("Authentication failed. Please check your credentials.")
@@ -78,7 +78,7 @@ from .enums import (
 
 # Version of the homismart_client package.
 # This is often read by setup.py.
-__version__ = "0.1.4" # Initialize with your starting version
+__version__ = "0.2.0"
 
 # Configure a NullHandler for the library's root logger.
 # This is crucial for libraries to prevent "No handler found" warnings

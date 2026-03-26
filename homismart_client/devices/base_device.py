@@ -146,20 +146,23 @@ class HomismartDevice:
             new_data: A dictionary containing the new state information.
         """
         logger.debug(f"Device {self.id}: Updating state. Current raw: {self._raw_data}, New data: {new_data}")
-        
+
+        # Work on a copy to avoid mutating the caller's dict.
+        merged = dict(new_data)
+
         # Preserve sharing-related fields if the device was already marked as shared
         # and the new data doesn't explicitly unshare it or provide new sharing info.
         if self._raw_data.get('shared') is True:
-            if new_data.get('shared') is None and 'shared' not in new_data: # If new_data doesn't mention 'shared'
-                new_data['shared'] = True # Maintain shared status
-            
-            if new_data.get('shared') is True: # If it's still shared or newly confirmed as shared
-                if 'permission' not in new_data and 'permission' in self._raw_data:
-                    new_data['permission'] = self._raw_data['permission']
-                if 'allowedTime' not in new_data and 'allowedTime' in self._raw_data:
-                    new_data['allowedTime'] = self._raw_data['allowedTime']
-        
-        self._raw_data.update(new_data)
+            if 'shared' not in merged:
+                merged['shared'] = True
+
+            if merged.get('shared') is True:
+                if 'permission' not in merged and 'permission' in self._raw_data:
+                    merged['permission'] = self._raw_data['permission']
+                if 'allowedTime' not in merged and 'allowedTime' in self._raw_data:
+                    merged['allowedTime'] = self._raw_data['allowedTime']
+
+        self._raw_data.update(merged)
         
         # If 'id' could change (highly unlikely for updates, but good to be aware)
         if 'id' in new_data and self.id != new_data['id']:

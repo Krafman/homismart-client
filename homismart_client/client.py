@@ -7,11 +7,12 @@ with the Homismart WebSocket API.
 import asyncio
 import json
 import logging
+import random
 import time
 from typing import Optional, Dict, Any, cast
 
 import websockets
-from websockets.exceptions import ConnectionClosed, InvalidStatusCode, WebSocketException
+from websockets.exceptions import ConnectionClosed, WebSocketException
 
 # Attempt to import dependent modules from the package
 try:
@@ -37,8 +38,10 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SUBDOMAIN = "prom"
 WEBSOCKET_URL_TEMPLATE = "wss://{subdomain}.homismart.com:443/homismartmain/websocket"
-RECONNECT_DELAY_SECONDS = 10
-HEARTBEAT_INTERVAL_SECONDS = 30 # Send a heartbeat if no other messages are sent
+RECONNECT_BASE_DELAY = 5          # Initial reconnect delay in seconds
+RECONNECT_MAX_DELAY = 300         # Maximum reconnect delay (5 minutes)
+RECONNECT_BACKOFF_FACTOR = 2.0    # Exponential backoff multiplier
+HEARTBEAT_INTERVAL_SECONDS = 30   # Send a heartbeat if no other messages are sent
 
 class HomismartClient:
     """
@@ -75,9 +78,12 @@ class HomismartClient:
         self._is_connected: bool = False
         self._is_logged_in: bool = False # This will be set by the session upon successful login
         self._keep_running: bool = False
-        self._receive_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
+        self._receive_task: Optional[asyncio.Task] = None
+        self._reconnect_task: Optional[asyncio.Task] = None
+        self._login_event: asyncio.Event = asyncio.Event()
         self._last_message_sent_time: float = 0.0
+        self._reconnect_attempt: int = 0
 
     @property
     def session(self) -> HomismartSession:
@@ -94,83 +100,185 @@ class HomismartClient:
         """Returns True if the client is authenticated with the server."""
         return self._is_logged_in
 
-    async def connect(self) -> None:
+    async def connect(self, timeout: float = 30.0) -> None:
         """
-        Establishes a WebSocket connection to the Homismart server and starts listening.
-        This method will run indefinitely, attempting to reconnect on disconnections,
-        until disconnect() is called.
+        Connects to the Homismart server, authenticates, and returns.
+
+        After successful login the receive loop, heartbeat, and background
+        reconnect loop are started as tasks. The caller regains control
+        once login succeeds (or *timeout* seconds elapse).
+
+        Args:
+            timeout: Maximum seconds to wait for the initial login.
+
+        Raises:
+            asyncio.TimeoutError: If login does not complete within *timeout*.
+            ConnectionError: If the WebSocket connection cannot be established.
         """
         if self._keep_running:
             logger.warning("Connect called while already running. Ignoring.")
             return
 
         self._keep_running = True
+        self._reconnect_attempt = 0
+        self._login_event = asyncio.Event()
         logger.info("Starting Homismart client...")
 
+        try:
+            # First connection attempt — with a caller-visible timeout.
+            await self._open_and_login(timeout)
+        except Exception:
+            # If first connection fails, clean up and re-raise so the
+            # caller knows immediately.
+            self._keep_running = False
+            await self._cleanup_connection()
+            raise
+
+        # First login succeeded — launch background tasks.
+        # _receive_task is already running (started in _open_and_login).
+        self._heartbeat_task = self._loop.create_task(self._send_heartbeats())
+        self._reconnect_task = self._loop.create_task(self._reconnect_loop())
+        logger.info("Homismart client connected and running.")
+
+    async def _open_and_login(self, timeout: float) -> None:
+        """Open the WebSocket and wait for a successful login response.
+
+        The server may send a redirect (prefix "0039") before the login
+        response.  When that happens the WebSocket is closed and
+        ``self._ws_url`` is updated by ``_handle_redirect``.  This method
+        detects the redirect and retries on the new URL within the same
+        overall *timeout*.
+        """
+        deadline = asyncio.get_event_loop().time() + timeout
+
+        while True:
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                raise asyncio.TimeoutError(
+                    f"Login did not complete within {timeout}s"
+                )
+
+            logger.info(f"Attempting to connect to WebSocket: {self._ws_url}")
+            self._login_event.clear()
+            url_before = self._ws_url
+
+            ws = await asyncio.wait_for(
+                websockets.connect(self._ws_url, open_timeout=10),
+                timeout=remaining,
+            )
+            self._websocket = ws
+            self._is_connected = True
+            logger.info(f"WebSocket connection established to {self._ws_url}.")
+
+            # Start receive loop as a task so it can process the login response.
+            self._receive_task = self._loop.create_task(self._receive_loop())
+
+            await self._on_open()
+
+            # Wait for either login success or the receive loop ending (redirect / error).
+            login_wait = asyncio.ensure_future(self._login_event.wait())
+
+            done, pending = await asyncio.wait(
+                [login_wait, self._receive_task],
+                timeout=max(deadline - asyncio.get_event_loop().time(), 1.0),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # Cancel the login_wait if it didn't finish, but never cancel
+            # _receive_task here — it must keep running after login.
+            if login_wait in pending:
+                login_wait.cancel()
+                try:
+                    await login_wait
+                except asyncio.CancelledError:
+                    pass
+
+            if self._login_event.is_set():
+                # Login succeeded.
+                break
+
+            if self._ws_url != url_before:
+                # Server sent a redirect — _ws_url was updated, retry.
+                logger.info(f"Redirected to {self._ws_url}, reconnecting...")
+                await self._cleanup_connection()
+                continue
+
+            # Neither login nor redirect — something else went wrong.
+            raise asyncio.TimeoutError(
+                f"Login did not complete within {timeout}s"
+            )
+
+        if not self._is_logged_in:
+            raise ConnectionError("Authentication failed")
+
+        self._reconnect_attempt = 0
+
+    async def _reconnect_loop(self) -> None:
+        """
+        Background task: waits for the receive loop to end, then
+        reconnects with exponential backoff until disconnect() is called.
+        """
         while self._keep_running:
+            # Wait for the current receive loop to finish (connection dropped).
+            if self._receive_task and not self._receive_task.done():
+                try:
+                    await self._receive_task
+                except Exception:
+                    pass  # Errors are handled inside _receive_loop.
+
+            if not self._keep_running:
+                break
+
+            # Connection was lost — clean up and reconnect.
+            await self._cleanup_connection()
+
+            delay = min(
+                RECONNECT_BASE_DELAY * (RECONNECT_BACKOFF_FACTOR ** self._reconnect_attempt),
+                RECONNECT_MAX_DELAY,
+            )
+            jitter = random.uniform(0, delay * 0.25)
+            total_delay = delay + jitter
+            logger.info(f"Will attempt to reconnect in {total_delay:.1f}s (attempt {self._reconnect_attempt + 1})...")
+            await asyncio.sleep(total_delay)
+            self._reconnect_attempt += 1
+
+            if not self._keep_running:
+                break
+
             try:
-                logger.info(f"Attempting to connect to WebSocket: {self._ws_url}")
-                # Set a timeout for the connection attempt
-                async with websockets.connect(self._ws_url, open_timeout=10) as ws:
-                    self._websocket = ws
-                    self._is_connected = True
-                    logger.info(f"WebSocket connection established to {self._ws_url}.")
-                    
-                    # The on_open logic (sending login) is now triggered by the session
-                    # after the client signals connection.
-                    # We can directly call the login sequence initiator here.
-                    await self._on_open() 
-
-                    if self._heartbeat_task is None or self._heartbeat_task.done():
-                        self._heartbeat_task = self._loop.create_task(self._send_heartbeats())
-                    
-                    # Start the message listening loop
-                    await self._receive_loop()
-
-            except InvalidStatusCode as e:
-                logger.error(f"WebSocket connection failed with status code {e.status_code}. URL: {self._ws_url}")
-                self._is_connected = False
-                self._websocket = None # Ensure websocket is None if connection failed
-                # No automatic retry for HTTP errors like 401/403 during handshake.
-                # This might indicate a persistent issue (e.g. wrong URL, server down).
-                self._emit_session_error("connection_failed_status", e)
-                if not self._keep_running: break # Exit if disconnect was called
-                await asyncio.sleep(RECONNECT_DELAY_SECONDS * 2) # Longer delay for status code errors
-            except (ConnectionRefusedError, OSError, WebSocketException, asyncio.TimeoutError) as e:
-                logger.error(f"WebSocket connection/operational error: {e}. URL: {self._ws_url}", exc_info=False) # exc_info=True for more detail
-                self._is_connected = False
-                self._websocket = None
-                self._emit_session_error("connection_operational_error", e)
+                await self._open_and_login(timeout=30.0)
+                # Restart heartbeat for the new connection.
+                # _receive_task is already running (started in _open_and_login).
+                self._heartbeat_task = self._loop.create_task(self._send_heartbeats())
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                logger.error(f"An unexpected error occurred in the connect loop: {e}", exc_info=True)
-                self._is_connected = False
-                self._websocket = None
-                self._emit_session_error("unexpected_connection_loop_error", e)
-            finally:
-                self._is_connected = False
-                self._is_logged_in = False # Reset login status on disconnect
-                if self._websocket:
-                    try:
-                        await self._websocket.close()
-                    except WebSocketException:
-                        pass # Already closed or error during close
-                self._websocket = None
-                logger.info("WebSocket connection closed.")
+                logger.error(f"Reconnect attempt failed: {e}", exc_info=False)
+                self._emit_session_error("connection_operational_error", e)
+                await self._cleanup_connection()
+                # Loop continues — will retry with next backoff delay.
 
-                if self._keep_running:
-                    logger.info(f"Will attempt to reconnect in {RECONNECT_DELAY_SECONDS} seconds...")
-                    await asyncio.sleep(RECONNECT_DELAY_SECONDS)
-                else:
-                    logger.info("Client stopping as per request.")
-                    break # Exit the while loop if _keep_running is False
-        
+        logger.info("Reconnect loop stopped.")
+
+    async def _cleanup_connection(self) -> None:
+        """Cancel heartbeat, close WebSocket, and reset state flags."""
+        self._is_connected = False
+        self._is_logged_in = False
+
         if self._heartbeat_task and not self._heartbeat_task.done():
             self._heartbeat_task.cancel()
             try:
                 await self._heartbeat_task
             except asyncio.CancelledError:
-                logger.debug("Heartbeat task cancelled.")
-        logger.info("Homismart client stopped.")
+                pass
+            self._heartbeat_task = None
+
+        if self._websocket:
+            try:
+                await self._websocket.close()
+            except WebSocketException:
+                pass
+        self._websocket = None
 
 
     async def _on_open(self) -> None:
@@ -236,8 +344,14 @@ class HomismartClient:
                 # Only send heartbeat if no other message was sent recently
                 if time.time() - self._last_message_sent_time > HEARTBEAT_INTERVAL_SECONDS:
                     logger.debug("Sending heartbeat...")
-                    await self.send_command_raw(RequestPrefix.HEARTBEAT, {})
+                    await asyncio.wait_for(
+                        self.send_command_raw(RequestPrefix.HEARTBEAT, {}),
+                        timeout=10.0,
+                    )
                 await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS / 2) # Check more frequently
+            except asyncio.TimeoutError:
+                logger.warning("Heartbeat: Send timed out. Connection may be stale. Stopping heartbeats.")
+                break
             except ConnectionClosed:
                 logger.warning("Heartbeat: Connection closed. Stopping heartbeats.")
                 break
@@ -265,17 +379,18 @@ class HomismartClient:
         Raises:
             ConnectionError: If the WebSocket is not connected.
         """
-        if not self._websocket or not self._is_connected:
+        ws = self._websocket
+        if not ws or not self._is_connected:
             msg = "WebSocket is not connected. Cannot send command."
             logger.error(msg)
             raise ConnectionError(msg)
 
         # Use the instance of HomismartCommandBuilder
         message_str = self._command_builder._build_message(prefix, payload)
-        
+
         try:
             logger.debug(f"SENT CMD: {prefix.name} ({prefix.value}) | Payload: {json.dumps(payload) if payload else '{}'}")
-            await self._websocket.send(message_str)
+            await ws.send(message_str)
             self._last_message_sent_time = time.time()
         except WebSocketException as e:
             logger.error(f"Failed to send command {prefix.name}: {e}", exc_info=True)
@@ -342,37 +457,17 @@ class HomismartClient:
         triggering a reconnection (which includes re-login).
         """
         logger.info(f"Handling redirection: New IP='{new_ip}', New Port='{new_port}'.")
-        # Port is part of the template, but the JS used cs.port (443) and just updated the IP.
-        # The server message for redirect ("0039") was: {"ip":"...", "port":"..."}
-        # Let's assume the new_port from server is the one to use for the path,
-        # but the actual connection port might still be 443 if it's WSS.
-        # The JS was: "wss://" + e.ip + ":" + cs.port + "/homismartmain/websocket"
-        # This implies the port in the redirect_data might be for a different purpose or cs.port (443) is always used.
-        # Let's assume the redirect_data's port is for the path, and connection port remains 443 for wss.
-        # For now, we'll just update the subdomain/IP part of the URL if the port is standard.
-        # If the new_port is different from 443, the URL structure might change.
-        # The simplest interpretation is that 'new_ip' replaces the subdomain part.
-        
-        # Let's assume the `new_ip` is the new host/subdomain part.
-        # If the server sends a full new hostname in `new_ip`, that's fine.
-        # If it only sends an IP, we might need to adjust.
-        # The JS `cs.ct("wss://" + e.ip + ":" + cs.port + "/homismartmain/websocket")`
-        # suggests `e.ip` is the new host and `cs.port` (443) is still used for the WSS connection.
-        # The `port` in the redirect message might be informational or for a different protocol.
-        
-        self._ws_url = f"wss://{new_ip}:{WEBSOCKET_URL_TEMPLATE.split(':')[2].split('/')[0]}/homismartmain/websocket"
-        # This takes the port from the template (443)
-        
+
+        # Vendor JS always uses port 443 for WSS: wss://<ip>:443/homismartmain/websocket
+        self._ws_url = f"wss://{new_ip}:443/homismartmain/websocket"
         logger.info(f"Updated WebSocket URL for redirection: {self._ws_url}")
 
         if self._websocket and self._is_connected:
             logger.info("Closing current connection to redirect...")
-            # Don't set _keep_running to False, as connect() loop will handle reconnect.
-            await self._websocket.close(code=1000, reason="Client redirecting") 
-            # The connect() loop's finally block will set _is_connected = False
-            # and then it will retry connecting to the new _ws_url.
+            await self._websocket.close(code=1000, reason="Client redirecting")
+            # The reconnect loop will detect the closed connection and
+            # reconnect using the new URL.
         else:
-            # If not connected, the next connection attempt in connect() will use the new URL.
             logger.info("Not currently connected, next connection attempt will use the new URL.")
 
 
@@ -382,23 +477,28 @@ class HomismartClient:
         """
         logger.info("Disconnect requested. Stopping client...")
         self._keep_running = False
-        
-        if self._heartbeat_task and not self._heartbeat_task.done():
-            self._heartbeat_task.cancel()
-        
-        if self._websocket and self._is_connected:
+
+        # Cancel background tasks.
+        for task_attr in ("_heartbeat_task", "_receive_task", "_reconnect_task"):
+            task = getattr(self, task_attr, None)
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            setattr(self, task_attr, None)
+
+        if self._websocket:
             try:
                 await self._websocket.close(code=1000, reason="Client initiated disconnect")
             except WebSocketException as e:
                 logger.warning(f"Exception during explicit disconnect: {e}")
-        
-        if self._receive_task and not self._receive_task.done():
-            # This task will exit when the websocket closes or _keep_running is false
-            logger.debug("Receive task should self-terminate.")
 
-        # Ensure flags are set correctly
+        # Ensure flags are set correctly.
         self._is_connected = False
         self._is_logged_in = False
+        self._websocket = None
         logger.info("Client disconnect process complete.")
 
     def _schedule_task(self, coro) -> asyncio.Task:

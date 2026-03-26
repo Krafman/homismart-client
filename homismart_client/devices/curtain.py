@@ -54,45 +54,32 @@ class CurtainDevice(HomismartDevice):
     def current_level(self) -> Optional[int]:
         """
         Returns the current curtain level (position) as a percentage (0-100).
-        0 might mean fully open, 100 fully closed, depending on device interpretation.
-        The raw 'curtainState' from the server might need normalization.
+        0 means fully open, 100 fully closed.
+
+        Normalization follows the vendor's TableModel.curtainStateFix logic:
+        - Values >= 200 encode a "stopped at" position (e.g. 250 = stopped at 50%).
+        - 99 is a special "stop" / unknown state.
+        - Values outside 0-100 after normalization are treated as unknown.
         """
         raw_state = self._raw_data.get("curtainState")
         if raw_state is None:
             return None
-        
+
         try:
             level = int(raw_state)
-            # Apply normalization similar to TableModel.curtainStateFix
-            if level >= 200: # Stop state might be encoded as 200 + level (e.g. 250 for stop at 50%)
-                # For simplicity, if it's a "stop" state, we might not have a definitive current level
-                # or it might represent the level at which it stopped.
-                # The JS `TableModel.curtainStateFix` had:
-                # if (level >= 200) { level = level - 200; }
-                # if (level > 100 || level === 99 || level === -1) { level = 100; }
-                # if (level === 1) { level = 0; }
-                # This normalization seems complex and tied to UI display.
-                # For now, let's assume the server sends a reasonably direct level or '99' for stop.
-                # If '99' is stop, it's not a percentage level.
-                if level == 99: # '99' seems to be a special "stop" or "default" state in JS
-                    return None # Or a property like `is_stopped` could be True.
-                if level >=200 and level <=300: # e.g. 250 means stopped at 50%
-                    return level - 200
-            
-            if level < 0 or level > 100: # Clamp to 0-100 if it's a direct level
-                 # If it's '99' (stop), it's not a percentage.
-                if level == 99: return None # Or handle as a specific "stopped" state
-                # The JS logic for level > 100 was to set it to 100.
-                # For now, we'll return None if it's out of expected direct percentage range.
-                # A more robust solution might involve an `is_moving` or `is_stopped` property.
-                logger.warning(f"Device {self.id}: Raw curtainState '{raw_state}' is outside 0-100 range and not '99'.")
-                return None # Or clamp: max(0, min(100, level)) if that's the API behavior.
-
-
-            return level
         except ValueError:
             logger.warning(f"Device {self.id}: Could not parse curtainState '{raw_state}' as integer.")
             return None
+
+        # Vendor encodes "stopped at X%" as 200 + X.
+        if level >= 200:
+            level = level - 200
+
+        # 99 = stop signal, -1 = unknown, >100 = invalid after normalization.
+        if level > 100 or level == 99 or level < 0:
+            return None
+
+        return level
 
     @property
     def closed_position_calibration(self) -> Optional[int]:

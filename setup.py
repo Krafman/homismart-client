@@ -50,21 +50,20 @@ setup(
     #     └── ... (other .py files)
 
     install_requires=[
-        "websockets>=10.0",
-        "python-dotenv>=1.0.0", # Specify a version range for the websockets library
-                            # Check latest stable, e.g., >=10.0, <13.0
+        "websockets>=13.0",
+        "python-dotenv>=1.0.0",
     ],
-    python_requires=">=3.8", # Based on asyncio features and type hinting
+    python_requires=">=3.9",
     classifiers=[
-        "Development Status :: 3 - Alpha",  # Or "4 - Beta" / "5 - Production/Stable"
+        "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License", # Change if you chose a different license
+        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Operating System :: OS Independent",
         "Topic :: Home Automation",
         "Topic :: Software Development :: Libraries :: Python Modules",
