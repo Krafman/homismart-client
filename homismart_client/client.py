@@ -36,7 +36,7 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SUBDOMAIN = "prom"
+DEFAULT_SUBDOMAIN = "prod"
 WEBSOCKET_URL_TEMPLATE = "wss://{subdomain}.homismart.com:443/homismartmain/websocket"
 RECONNECT_BASE_DELAY = 5          # Initial reconnect delay in seconds
 RECONNECT_MAX_DELAY = 300         # Maximum reconnect delay (5 minutes)
