@@ -298,7 +298,7 @@ async def test_curtain_open_percentage_is_inverse_of_level():
         with pytest.raises(ValueError):
             await curtain.set_open_percentage(101)
 
-    assert [p["curtainState"] for p in _sent_payloads(ws, "0006")] == ["0", "70"]
+    assert [p["curtainState"] for p in _sent_payloads(ws, "0006")] == [0, 70]
     await client.disconnect()
 
 
@@ -371,3 +371,40 @@ async def test_default_ssl_context_is_built_off_the_event_loop():
 
     assert seen == ["default-context", "default-context"]
     assert len(threads) == 1 and threads[0] is not threading.main_thread()
+
+
+# --- Command format (0.3.2) -------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_control_commands_use_the_apps_types():
+    """Commands carry numbers as numbers, as the official app does.
+
+    The server sends "lock" and "iconId" back as text. A real shutter silently
+    ignored commands with "curtainState": "75", and answered at once to 75.
+    """
+    client = HomismartClient("user@example.com", "pw")
+    ws = FakeWS([LOGIN_OK])
+    with _patch_connect(ws):
+        await client.connect(timeout=5)
+        ws.push(_device_list({
+            "id": "c1", "type": 4, "curtainState": 100, "lock": "1", "iconId": "25",
+            "led": 0, "consumption": 5, "version": 0, "name": "Study Blinds",
+        }))
+        await _wait_for(lambda: client.session.get_device_by_id("c1"))
+        curtain = client.session.get_device_by_id("c1")
+        await curtain.set_level(75)
+        await curtain.stop()
+
+    for payload in _sent_payloads(ws, "0006"):
+        assert payload["lock"] == 1 and payload["iconId"] == 25
+        assert payload["power"] is False  # always present, like the app's object
+        assert payload["name"] == "Study Blinds"  # text fields stay text
+    assert [p["curtainState"] for p in _sent_payloads(ws, "0006")] == [75, 99]
+    await client.disconnect()
+
+
+def test_to_app_types_leaves_real_text_and_existing_power_alone():
+    from homismart_client.devices.base_device import to_app_types
+
+    typed = to_app_types({"lock": "2", "power": True, "lastOn": "2026-11-10 18:33:10", "led": "x"})
+    assert typed == {"lock": 2, "power": True, "lastOn": "2026-11-10 18:33:10", "led": "x"}
