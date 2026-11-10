@@ -263,10 +263,15 @@ class DeviceType(IntEnum):
     # Type 3 is undefined in provided JS
     SHUTTER = 4
     CURTAIN = 5
-    SWITCH_MULTI_GANG_A = 6 # Assumption: another switch type
-    DOUBLE_SWITCH_OR_SOCKET = 7 # MainDeviceModel.doubleType
-    SOCKET_ALT = 8          # Assumption: another socket type
+    WATER_HEATER_SWITCH = 6  # Boiler switch with a timer ("maxWorkTime"); seen on real hardware.
+    TWO_GANG_SWITCH = 7      # MainDeviceModel.doubleType. Each gang is its own device
+                             # with ID "<unit id>-<relayNumber>"; seen on real hardware.
+    SOCKET_ALT = 8           # Assumption: another socket type
     DOOR_LOCK = 9
+
+    # Older names, kept as aliases so existing code keeps working.
+    SWITCH_MULTI_GANG_A = 6
+    DOUBLE_SWITCH_OR_SOCKET = 7
     # Type 10 mentioned in TableModel.controlAllDevices for 'all', not a specific device type
     # Types like 45 for 'curtain' in controlAllDevices are group types, not individual device types.
 
@@ -322,21 +327,3 @@ class ErrorCode(IntEnum):
     # PASSWORD_REQUIRED = client-side validation
 
     # Add more as discovered or if the server sends codes not in this initial list.
-
-if __name__ == '__main__':
-    # Example usage (can be removed or kept for simple testing)
-    print(f"Login Request Prefix: {RequestPrefix.LOGIN.value}")
-    print(f"Device List Receive Prefix: {ReceivePrefix.DEVICE_LIST.name} -> {ReceivePrefix.DEVICE_LIST.value}")
-    print(f"Curtain Device Type Code: {DeviceType.CURTAIN.value}")
-    print(f"Error Code for Permission Denied: {ErrorCode.PERMISSION_DENIED.value}")
-
-    try:
-        print(ReceivePrefix('0005').name)
-    except ValueError:
-        print("Prefix '0005' not found directly by value in ReceivePrefix, use .DEVICE_LIST")
-
-    # Accessing by value (if needed, though direct attribute access is preferred)
-    for prefix_enum in ReceivePrefix:
-        if prefix_enum.value == "0005":
-            print(f"Found by value: {prefix_enum.name}")
-            break

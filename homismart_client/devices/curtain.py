@@ -11,11 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 # Import the base device class.
 # In a package structure, this would simply be:
 # from .base_device import HomismartDevice
-try:
-    from .base_device import HomismartDevice
-except ImportError:
-    # Fallback for scenarios where the relative import might not work immediately
-    from base_device import HomismartDevice  # type: ignore
+from .base_device import HomismartDevice
 
 if TYPE_CHECKING:
     from ..session import HomismartSession
@@ -80,6 +76,28 @@ class CurtainDevice(HomismartDevice):
             return None
 
         return level
+
+    @property
+    def open_percentage(self) -> Optional[int]:
+        """
+        Returns how far the curtain is open, 0 (closed) to 100 (fully open).
+
+        This is the inverse of :attr:`current_level`, which uses the vendor's
+        convention (0 = open, 100 = closed). Use this for platforms such as
+        Home Assistant, where 0 means closed. The vendor convention was
+        confirmed on real shutters: one reporting 80 was physically closed.
+        """
+        level = self.current_level
+        return None if level is None else 100 - level
+
+    async def set_open_percentage(self, open_percentage: int) -> None:
+        """
+        Moves the curtain so it is *open_percentage* open (0 = closed, 100 = open).
+        The inverse convention of :meth:`set_level`.
+        """
+        if not (0 <= open_percentage <= 100):
+            raise ValueError("Open percentage must be between 0 and 100.")
+        await self.set_level(100 - open_percentage)
 
     @property
     def closed_position_calibration(self) -> Optional[int]:
@@ -154,64 +172,3 @@ class CurtainDevice(HomismartDevice):
     def __repr__(self) -> str:
         return (f"<CurtainDevice(id='{self.id}', name='{self.name}', "
                 f"type_code='{self.device_type_code}', current_level='{self.current_level}')>")
-
-if __name__ == '__main__':
-    # This example is conceptual as it requires a mock session, client, and event loop.
-    import asyncio
-
-    class MockHomismartSession:  # Minimal session stub for the example
-        def _get_device_type_enum_from_code(self, code): return code
-        def _notify_device_update(self, device): pass
-        async def _send_command_for_device(self, device_id, command_type, command_payload):
-            print(f"MockSession: Sending command for {device_id}: {command_type} with {command_payload}")
-            # Simulate a state change for the device if it's a known command
-            if command_type == "toggle_property" and "curtainState" in command_payload:
-                print(f"MockSession: Device {device_id} curtain state would be updated to {command_payload.get('curtainState')}")
-            elif command_type == "set_curtain_closed_pos":
-                 print(f"MockSession: Device {device_id} closed position calibration would be set to {command_payload.get('closedPosition')}")
-            return {"result": True}
-
-    print("Demonstrating CurtainDevice:")
-
-    mock_session_instance = MockHomismartSession()
-
-    curtain_data = {
-        "id": "05CURTAINDEV01", "name": "Bedroom Curtain", "type": 5, # CURTAIN type
-        "onLine": True, "power": True, # Curtains might also have a 'power' field
-        "curtainState": "50", # Currently at 50%
-        "closedPosition": 8, # Example calibration
-        "updateTime": int(time.time() * 1000)
-    }
-
-    my_curtain = CurtainDevice(session=mock_session_instance, initial_data=curtain_data)
-
-    print(my_curtain)
-    print(f"  Current Level: {my_curtain.current_level}%")
-    print(f"  Is Online: {my_curtain.is_online}")
-    print(f"  Calibrated Closed Position: {my_curtain.closed_position_calibration}")
-
-    async def main_test_curtain():
-        print("\n--- Testing Curtain ---")
-        await my_curtain.set_level(75)
-        await my_curtain.open_fully()
-        await my_curtain.close_fully()
-        await my_curtain.stop()
-        await my_curtain.set_closed_position_calibration(7)
-
-    if hasattr(asyncio, 'run'):
-        asyncio.run(main_test_curtain())
-    else:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main_test_curtain())
-
-    print("\nSimulating server update for curtain:")
-    curtain_update_from_server = {"id": my_curtain.id, "curtainState": "20"} # 20%
-    my_curtain.update_state(curtain_update_from_server)
-    print(my_curtain)
-    print(f"  Current Level after update: {my_curtain.current_level}%")
-
-    curtain_update_stopped = {"id": my_curtain.id, "curtainState": "99"} # Stopped
-    my_curtain.update_state(curtain_update_stopped)
-    print(my_curtain)
-    print(f"  Current Level after stop update: {my_curtain.current_level}% (None indicates stopped or non-percentage state)")
-

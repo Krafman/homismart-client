@@ -8,11 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 # Import the base device.
 # In a package structure, this would be: from .base_device import HomismartDevice
-try:
-    from .base_device import HomismartDevice
-except ImportError:
-    # Fallback for scenarios where the relative import might not work immediately
-    from base_device import HomismartDevice # Assumes base_device.py is in the same path
+from .base_device import HomismartDevice
 
 if TYPE_CHECKING:
     from ..session import HomismartSession
@@ -61,12 +57,8 @@ class LockDevice(HomismartDevice):
         """
         Locks the device.
         This uses the "0016" MODIFY_DEVICE command, setting 'lock' to "2".
+        Always sent, even if the cached state already says locked.
         """
-        current_lock_state = self.is_locked
-        if current_lock_state is True:
-            logger.info(f"Device {self.id} ('{self.name}') is already locked.")
-            return
-        
         logger.info(f"Device {self.id} ('{self.name}'): Attempting to lock.")
         # The _execute_modify_command in HomismartDevice constructs the payload
         # with current name and iconId if not provided.
@@ -76,17 +68,8 @@ class LockDevice(HomismartDevice):
         """
         Unlocks the device.
         This uses the "0016" MODIFY_DEVICE command, setting 'lock' to "1".
+        Always sent, even if the cached state already says unlocked.
         """
-        current_lock_state = self.is_locked
-        if current_lock_state is False:
-            logger.info(f"Device {self.id} ('{self.name}') is already unlocked.")
-            return
-        if current_lock_state is None and self._raw_data.get("lock"):
-             logger.warning(f"Device {self.id} ('{self.name}'): Attempting to unlock, but current lock state is ambiguous ('{self._raw_data.get('lock')}'). Proceeding.")
-        elif current_lock_state is None:
-             logger.warning(f"Device {self.id} ('{self.name}'): Attempting to unlock, but current lock state is unknown. Proceeding.")
-
-
         logger.info(f"Device {self.id} ('{self.name}'): Attempting to unlock.")
         await self._execute_modify_command(lock_status=LOCK_STATE_UNLOCKED)
 
@@ -125,70 +108,3 @@ class LockDevice(HomismartDevice):
             
         return (f"<LockDevice(id='{self.id}', name='{self.name}', "
                 f"type_code='{self.device_type_code}', status='{locked_status_str}')>")
-
-if __name__ == '__main__':
-    # This example is conceptual as it requires a mock session, client, and event loop.
-    import asyncio
-    import time
-
-    class MockHomismartSession: # Copied for standalone testing
-        def _get_device_type_enum_from_code(self, code): return code
-        def _notify_device_update(self, device): pass
-        async def _send_command_for_device(self, device_id, command_type, command_payload):
-            print(f"MockSession: Sending command for {device_id}: {command_type} with {command_payload}")
-            # Simulate a state change for the device if it's a known command
-            if command_type == "modify_device" and "lock" in command_payload:
-                print(f"MockSession: Device {device_id} lock state would be updated to {command_payload.get('lock')}")
-            return {"result": True}
-
-    print("Demonstrating LockDevice:")
-
-    mock_session_instance = MockHomismartSession()
-
-    lock_data_locked = {
-        "id": "09DOORLOCK001", "name": "Front Door", "type": 9, # DOOR_LOCK type
-        "onLine": True, "lock": LOCK_STATE_LOCKED, "iconId": "1",
-        "updateTime": int(time.time() * 1000)
-        # ... other relevant fields
-    }
-    lock_data_unlocked = {
-        "id": "09DOORLOCK002", "name": "Back Door", "type": 9,
-        "onLine": True, "lock": LOCK_STATE_UNLOCKED, "iconId": "1",
-        "updateTime": int(time.time() * 1000)
-    }
-
-    front_door = LockDevice(session=mock_session_instance, initial_data=lock_data_locked)
-    back_door = LockDevice(session=mock_session_instance, initial_data=lock_data_unlocked)
-
-    print(front_door)
-    print(f"  Front Door is Locked: {front_door.is_locked}")
-
-    print(back_door)
-    print(f"  Back Door is Locked: {back_door.is_locked}")
-
-    async def main_test_lock():
-        print("\n--- Testing Front Door (currently Locked) ---")
-        await front_door.unlock_device() # Expected: sends lock: "1" via "0016"
-        # In a real scenario, front_door.is_locked would update after server confirmation ("0009")
-        # front_door.update_state({"id": front_door.id, "lock": LOCK_STATE_UNLOCKED}) # Simulate update
-        # print(f"  Front Door is now Locked: {front_door.is_locked}")
-
-        print("\n--- Testing Back Door (currently Unlocked) ---")
-        await back_door.lock_device()  # Expected: sends lock: "2" via "0016"
-        
-        # Example of trying to lock an already locked door (should log and return)
-        # front_door.update_state({"id": front_door.id, "lock": LOCK_STATE_LOCKED}) # Simulate it's locked again
-        # await front_door.lock_device()
-
-
-    if hasattr(asyncio, 'run'):
-        asyncio.run(main_test_lock())
-    else:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main_test_lock())
-
-    print("\nSimulating server update for front door:")
-    lock_update_from_server = {"id": front_door.id, "lock": LOCK_STATE_UNLOCKED}
-    front_door.update_state(lock_update_from_server)
-    print(front_door)
-    print(f"  Front Door is Locked after update: {front_door.is_locked}")

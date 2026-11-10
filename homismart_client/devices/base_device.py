@@ -136,6 +136,32 @@ class HomismartDevice:
         """Returns the icon ID string of the device, if available."""
         return cast(Optional[str], self._raw_data.get("iconId"))
 
+    @property
+    def relay_number(self) -> Optional[int]:
+        """The gang (relay) this device controls on a multi-gang unit, or None.
+
+        A two-gang switch appears as two devices, "<unit id>-1" and
+        "<unit id>-2", each with its own relayNumber.
+        """
+        relay = self._raw_data.get("relayNumber")
+        try:
+            return int(relay) if relay is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @property
+    def unit_id(self) -> str:
+        """ID of the physical unit this device belongs to.
+
+        The same as :attr:`id`, except for the gangs of a multi-gang unit,
+        which all share the unit's ID (their own ID without the "-N" suffix).
+        """
+        if self.relay_number is not None:
+            unit, sep, _ = self.id.rpartition("-")
+            if sep:
+                return unit
+        return self.id
+
     def update_state(self, new_data: Dict[str, Any]) -> None:
         """
         Updates the device's state with new data from the server.
