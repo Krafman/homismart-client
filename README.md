@@ -55,7 +55,9 @@ async def main():
 asyncio.run(main())
 ```
 
-`connect()` (or entering `async with`) returns as soon as login succeeds. A wrong
+`connect()` (or entering `async with`) returns as soon as login succeeds. To use
+your application's own TLS context, pass `ssl_context=`; otherwise a default one is
+created once, without blocking the event loop. A wrong
 username or password raises `AuthenticationError` immediately; a server that
 doesn't answer raises `asyncio.TimeoutError` after `timeout` seconds (default 30).
 

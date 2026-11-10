@@ -60,7 +60,7 @@ def _patch_connect(*sockets: FakeWS):
     """Make websockets.connect return the given sockets in order."""
     it = iter(sockets)
 
-    async def fake_connect(url, open_timeout=None):
+    async def fake_connect(url, open_timeout=None, ssl=None):
         return next(it)
 
     return patch.object(client_mod.websockets, "connect", side_effect=fake_connect)
@@ -126,7 +126,7 @@ async def test_redirect_before_login_reconnects_to_new_host():
     urls = []
     sockets = iter([FakeWS(['0039{"ip": "10.0.0.5", "port": "8443"}']), FakeWS([LOGIN_OK])])
 
-    async def fake_connect(url, open_timeout=None):
+    async def fake_connect(url, open_timeout=None, ssl=None):
         urls.append(url)
         return next(sockets)
 
@@ -321,3 +321,53 @@ def test_two_gang_switch_gangs_share_a_unit_id():
 def test_open_percentage_none_when_unknown():
     curtain = CurtainDevice(session=None, initial_data={"id": "c1", "curtainState": "99"})
     assert curtain.open_percentage is None
+
+
+# --- TLS context (0.3.1) ----------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_given_ssl_context_is_used():
+    import ssl as ssl_mod
+
+    context = ssl_mod.SSLContext(ssl_mod.PROTOCOL_TLS_CLIENT)
+    client = HomismartClient("user@example.com", "pw", ssl_context=context)
+    seen = []
+
+    async def fake_connect(url, open_timeout=None, ssl=None):
+        seen.append(ssl)
+        return FakeWS([LOGIN_OK])
+
+    with patch.object(client_mod.websockets, "connect", side_effect=fake_connect):
+        await client.connect(timeout=5)
+    assert seen == [context]
+    await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_default_ssl_context_is_built_off_the_event_loop():
+    import threading
+
+    threads = []
+
+    def create_default_context():
+        threads.append(threading.current_thread())
+        return "default-context"
+
+    seen = []
+
+    async def fake_connect(url, open_timeout=None, ssl=None):
+        seen.append(ssl)
+        return FakeWS([LOGIN_OK])
+
+    with (
+        patch.object(client_mod, "_default_ssl_context", None),
+        patch.object(client_mod.ssl, "create_default_context", create_default_context),
+        patch.object(client_mod.websockets, "connect", side_effect=fake_connect),
+    ):
+        for _ in range(2):  # built once, then reused
+            client = HomismartClient("user@example.com", "pw")
+            await client.connect(timeout=5)
+            await client.disconnect()
+
+    assert seen == ["default-context", "default-context"]
+    assert len(threads) == 1 and threads[0] is not threading.main_thread()
