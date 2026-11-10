@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.3.2 — 2026-11-10
+## 0.3.3 — 2026-11-10
+- Same code as 0.3.2. Earlier releases were withdrawn from PyPI because their
+  examples and tests contained data from a real installation; examples and
+  tests now use fictional values only, and CI rejects real-looking device IDs.
+
+## 0.3.2 — 2026-11-10 (withdrawn)
 
 ### Fixed
 - **Curtain and shutter commands work on every device.** Commands now carry
