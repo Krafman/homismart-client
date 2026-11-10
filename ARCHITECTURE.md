@@ -20,7 +20,7 @@
 |  +----------------------------------+                                             |
 |  | HomismartClient                  |  <--- Main entry point                      |
 |  |                                  |                                             |
-|  |  connect()  -----> WebSocket ----|-------> wss://prom.homismart.com:443        |
+|  |  connect()  -----> WebSocket ----|-------> wss://prod.homismart.com:443        |
 |  |  disconnect()      connection    |              /homismartmain/websocket        |
 |  |  send_command_raw()              |                                             |
 |  |                                  |                                             |

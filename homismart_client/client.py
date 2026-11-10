@@ -9,29 +9,17 @@ import json
 import logging
 import random
 import time
-from typing import Optional, Dict, Any, cast
+import warnings
+from typing import Any, Coroutine, Dict, Optional
 
 import websockets
 from websockets.exceptions import ConnectionClosed, WebSocketException
 
-# Attempt to import dependent modules from the package
-try:
-    from .enums import RequestPrefix, ReceivePrefix
-    from .exceptions import (
-        AuthenticationError, ConnectionError, HomismartError, CommandError
-    )
-    from .session import HomismartSession
-    from .commands import HomismartCommandBuilder
-    from .utils import md5_hash
-except ImportError:
-    # Fallbacks for standalone development/testing
-    from enums import RequestPrefix, ReceivePrefix # type: ignore
-    from exceptions import ( # type: ignore
-        AuthenticationError, ConnectionError, HomismartError, CommandError
-    )
-    from session import HomismartSession # type: ignore
-    from commands import HomismartCommandBuilder # type: ignore
-    from utils import md5_hash # type: ignore
+from .enums import RequestPrefix
+from .exceptions import AuthenticationError, ConnectionError
+from .session import HomismartSession
+from .commands import HomismartCommandBuilder
+from .utils import md5_hash
 
 
 logger = logging.getLogger(__name__)
@@ -62,16 +50,23 @@ class HomismartClient:
         Args:
             username: The Homismart account username (email).
             password: The Homismart account password (plain text).
-            subdomain: The server subdomain (e.g., "prom").
-            loop: The asyncio event loop to use. If None, asyncio.get_event_loop() is used.
+            subdomain: The server subdomain. Defaults to "prod".
+            loop: Deprecated and ignored. Background tasks always run on the
+                event loop that calls :meth:`connect`.
         """
+        if loop is not None:
+            warnings.warn(
+                "The 'loop' argument is deprecated and ignored; the running "
+                "event loop is used instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self._username: str = username
         self._password_hash: str = md5_hash(password) # Hash password immediately
         self._subdomain: str = subdomain
         self._ws_url: str = WEBSOCKET_URL_TEMPLATE.format(subdomain=self._subdomain)
-        
-        self._loop: asyncio.AbstractEventLoop = loop or asyncio.get_event_loop()
-        self._websocket: Optional[websockets.WebSocketClientProtocol] = None
+
+        self._websocket: Optional[Any] = None
         self._session: HomismartSession = HomismartSession(self) # Client provides itself to session
         self._command_builder: HomismartCommandBuilder = HomismartCommandBuilder()
 
@@ -82,6 +77,8 @@ class HomismartClient:
         self._receive_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
         self._login_event: asyncio.Event = asyncio.Event()
+        # Set when the server rejects the login, so connect() can fail fast.
+        self._login_error: Optional[Exception] = None
         self._last_message_sent_time: float = 0.0
         self._reconnect_attempt: int = 0
 
@@ -112,8 +109,9 @@ class HomismartClient:
             timeout: Maximum seconds to wait for the initial login.
 
         Raises:
+            AuthenticationError: If the server rejects the username or password.
             asyncio.TimeoutError: If login does not complete within *timeout*.
-            ConnectionError: If the WebSocket connection cannot be established.
+            OSError / WebSocketException: If the WebSocket cannot be opened.
         """
         if self._keep_running:
             logger.warning("Connect called while already running. Ignoring.")
@@ -136,8 +134,8 @@ class HomismartClient:
 
         # First login succeeded — launch background tasks.
         # _receive_task is already running (started in _open_and_login).
-        self._heartbeat_task = self._loop.create_task(self._send_heartbeats())
-        self._reconnect_task = self._loop.create_task(self._reconnect_loop())
+        self._heartbeat_task = asyncio.create_task(self._send_heartbeats())
+        self._reconnect_task = asyncio.create_task(self._reconnect_loop())
         logger.info("Homismart client connected and running.")
 
     async def _open_and_login(self, timeout: float) -> None:
@@ -149,10 +147,10 @@ class HomismartClient:
         detects the redirect and retries on the new URL within the same
         overall *timeout*.
         """
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
 
         while True:
-            remaining = deadline - asyncio.get_event_loop().time()
+            remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 raise asyncio.TimeoutError(
                     f"Login did not complete within {timeout}s"
@@ -160,6 +158,7 @@ class HomismartClient:
 
             logger.info(f"Attempting to connect to WebSocket: {self._ws_url}")
             self._login_event.clear()
+            self._login_error = None
             url_before = self._ws_url
 
             ws = await asyncio.wait_for(
@@ -171,7 +170,7 @@ class HomismartClient:
             logger.info(f"WebSocket connection established to {self._ws_url}.")
 
             # Start receive loop as a task so it can process the login response.
-            self._receive_task = self._loop.create_task(self._receive_loop())
+            self._receive_task = asyncio.create_task(self._receive_loop())
 
             await self._on_open()
 
@@ -180,7 +179,7 @@ class HomismartClient:
 
             done, pending = await asyncio.wait(
                 [login_wait, self._receive_task],
-                timeout=max(deadline - asyncio.get_event_loop().time(), 1.0),
+                timeout=max(deadline - asyncio.get_running_loop().time(), 1.0),
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
@@ -192,6 +191,11 @@ class HomismartClient:
                     await login_wait
                 except asyncio.CancelledError:
                     pass
+
+            if self._login_error is not None:
+                # Server rejected the credentials: no point retrying.
+                await self._cleanup_connection()
+                raise self._login_error
 
             if self._login_event.is_set():
                 # Login succeeded.
@@ -217,20 +221,29 @@ class HomismartClient:
         """
         Background task: waits for the receive loop to end, then
         reconnects with exponential backoff until disconnect() is called.
+
+        Emits ``connection_lost`` once when an established connection drops
+        and ``connection_restored`` once the client is logged in again. Stops
+        retrying if the server rejects the credentials (a
+        ``session_error`` event of type ``authentication_failed`` is emitted).
         """
+        connection_down = False
         while self._keep_running:
             # Wait for the current receive loop to finish (connection dropped).
+            # asyncio.wait() never raises the task's own exception or
+            # cancellation, so a cancelled receive task can't kill this loop.
             if self._receive_task and not self._receive_task.done():
-                try:
-                    await self._receive_task
-                except Exception:
-                    pass  # Errors are handled inside _receive_loop.
+                await asyncio.wait({self._receive_task})
 
             if not self._keep_running:
                 break
 
             # Connection was lost — clean up and reconnect.
             await self._cleanup_connection()
+            if not connection_down:
+                connection_down = True
+                logger.warning("Connection to Homismart lost.")
+                self._session._emit_event("connection_lost")
 
             delay = min(
                 RECONNECT_BASE_DELAY * (RECONNECT_BACKOFF_FACTOR ** self._reconnect_attempt),
@@ -249,8 +262,19 @@ class HomismartClient:
                 await self._open_and_login(timeout=30.0)
                 # Restart heartbeat for the new connection.
                 # _receive_task is already running (started in _open_and_login).
-                self._heartbeat_task = self._loop.create_task(self._send_heartbeats())
+                self._heartbeat_task = asyncio.create_task(self._send_heartbeats())
+                connection_down = False
+                logger.info("Connection to Homismart restored.")
+                self._session._emit_event("connection_restored")
             except asyncio.CancelledError:
+                break
+            except AuthenticationError as e:
+                # Credentials were rejected (e.g. password changed). Retrying
+                # would only hammer the server; stop and let the caller react
+                # to the session_error event already emitted by the session.
+                logger.error(f"Reconnect stopped: {e}")
+                self._keep_running = False
+                await self._cleanup_connection()
                 break
             except Exception as e:
                 logger.error(f"Reconnect attempt failed: {e}", exc_info=False)
@@ -337,6 +361,22 @@ class HomismartClient:
             self._is_logged_in = False
 
 
+    async def _abort_stale_connection(self) -> None:
+        """End the current receive loop so the reconnect loop takes over.
+
+        Tries a normal close first; if that does not finish quickly (the
+        socket is likely dead), cancels the receive task directly.
+        """
+        ws = self._websocket
+        if ws is not None:
+            try:
+                await asyncio.wait_for(ws.close(), timeout=5.0)
+            except (asyncio.TimeoutError, WebSocketException, OSError):
+                pass
+        task = self._receive_task
+        if task is not None and not task.done():
+            task.cancel()
+
     async def _send_heartbeats(self) -> None:
         """Periodically sends a heartbeat message to keep the connection alive."""
         while self._keep_running and self._is_connected:
@@ -350,7 +390,8 @@ class HomismartClient:
                     )
                 await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS / 2) # Check more frequently
             except asyncio.TimeoutError:
-                logger.warning("Heartbeat: Send timed out. Connection may be stale. Stopping heartbeats.")
+                logger.warning("Heartbeat: Send timed out. Connection looks stale; forcing a reconnect.")
+                await self._abort_stale_connection()
                 break
             except ConnectionClosed:
                 logger.warning("Heartbeat: Connection closed. Stopping heartbeats.")
@@ -405,11 +446,6 @@ class HomismartClient:
         """Sends the login command to the server."""
         logger.info(f"Attempting to log in as {self._username}...")
         try:
-            # HomismartCommandBuilder is now an instance member
-            # No, command builder is a static class, so it's fine.
-            # Actually, the plan was to make it an instance. Let's stick to that.
-            # The session will call this client's send_command_raw.
-            # The client itself will use the builder when sending.
             await self.send_command_raw(
                 RequestPrefix.LOGIN,
                 {"username": self._username, "password": self._password_hash}
@@ -487,6 +523,8 @@ class HomismartClient:
                     await task
                 except asyncio.CancelledError:
                     pass
+                except Exception as e:  # Task failed while we were stopping it.
+                    logger.debug(f"Background task {task_attr} ended with error: {e}")
             setattr(self, task_attr, None)
 
         if self._websocket:
@@ -501,9 +539,24 @@ class HomismartClient:
         self._websocket = None
         logger.info("Client disconnect process complete.")
 
-    def _schedule_task(self, coro) -> asyncio.Task:
-        """Helper to schedule a task on the client's event loop."""
-        return self._loop.create_task(coro)
+    async def __aenter__(self) -> "HomismartClient":
+        """Connect on entering ``async with HomismartClient(...) as client``."""
+        await self.connect()
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        """Disconnect when leaving the ``async with`` block."""
+        await self.disconnect()
+
+    def _fail_login(self, exc: Exception) -> None:
+        """Called by the session when the server rejects the login."""
+        self._is_logged_in = False
+        self._login_error = exc
+        self._login_event.set()  # Unblock _open_and_login so it can raise.
+
+    def _schedule_task(self, coro: Coroutine[Any, Any, Any]) -> "asyncio.Task[Any]":
+        """Schedule a coroutine on the running event loop."""
+        return asyncio.create_task(coro)
 
     def _emit_session_error(self, error_type: str, exception_obj: Exception) -> None:
         """Emits a session_error event via the session."""
@@ -513,4 +566,3 @@ class HomismartClient:
             "message": str(exception_obj),
             "exception_object": exception_obj
         })
-
