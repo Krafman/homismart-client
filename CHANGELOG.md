@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.2 — 2026-11-10
+
+### Fixed
+- **Curtain and shutter commands work on every device.** Commands now carry
+  numbers as numbers, the way the official app (10.9.4) sends them. Some
+  shutters silently ignored `"curtainState": "75"` (text), while others
+  tolerated it, so a blind could look stuck in one setup and work in another.
+- Every control command is typed like the app's: numeric text from the server
+  (`"lock": "1"`, `"iconId": "25"`) is sent back as a number, and `power` is
+  always present.
+
 ## 0.3.1 — 2026-11-10
 
 ### Fixed

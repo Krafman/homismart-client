@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # The API seems to use 'curtainState' in the "0006" command.
 # A value of '99' was often used for stop or a default/unknown state before setting a new level.
 # Levels 0-100 for position.
-CURTAIN_STATE_STOP = "99" # Observed in JS as a potential stop command or default
+CURTAIN_STATE_STOP = 99  # Stop signal; sent as a number like every curtainState
 CURTAIN_STATE_OPEN_PERCENT = 0 # Typically, 0% means fully open for many systems
 CURTAIN_STATE_CLOSED_PERCENT = 100 # Typically, 100% means fully closed
 
@@ -120,8 +120,8 @@ class CurtainDevice(HomismartDevice):
             raise ValueError("Curtain level must be between 0 and 100.")
 
         logger.info(f"Device {self.id} ('{self.name}'): Attempting to set level to {level_percentage}%.")
-        # The "0006" command uses 'curtainState' with the direct percentage value.
-        await self._execute_control_command({"curtainState": str(level_percentage)})
+        # "0006" with curtainState as a number: some devices ignore it as text.
+        await self._execute_control_command({"curtainState": level_percentage})
 
     async def open_fully(self) -> None:
         """Fully opens the curtain (sets level to 0%)."""

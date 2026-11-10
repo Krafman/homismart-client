@@ -19,6 +19,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Number fields of the official app's device object (JSONDevice, unchanged in
+# app 10.9.4). The server sends some of them back as text, e.g. "lock": "1",
+# but control commands must carry them as numbers, the way the app does: some
+# devices silently ignore a command with "curtainState": "75".
+APP_INT_FIELDS = frozenset(
+    {"consumption", "curtainState", "iconId", "led", "lock", "relayNumber", "type", "version"}
+)
+
+
+def to_app_types(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a control payload typed like the official app sends it.
+
+    Numeric text in number fields becomes a number, and "power" is always
+    present (the app's object always has it; False for curtains).
+    """
+    typed = dict(payload)
+    for key in APP_INT_FIELDS & typed.keys():
+        value = typed[key]
+        if isinstance(value, str) and value.lstrip("-").isdigit():
+            typed[key] = int(value)
+    typed.setdefault("power", False)
+    return typed
+
 class HomismartDevice:
     """
     Base class representing a Homismart device.
@@ -213,7 +236,8 @@ class HomismartDevice:
         payload = self._raw_data.copy()
         payload.update(updated_properties)
         payload["updateTime"] = int(time.time() * 1000)
-        
+        payload = to_app_types(payload)
+
         logger.debug(f"Device {self.id}: Preparing '0006' (TOGGLE_PROPERTY) command with payload: {payload}")
         # The session will use HomismartCommandBuilder.build_toggle_property_message(payload)
         # and then send it using the client.
