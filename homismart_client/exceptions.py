@@ -55,39 +55,3 @@ class ParameterError(CommandError):
     This is a more specific version of CommandError.
     """
     pass
-
-if __name__ == '__main__':
-    # Example usage (can be removed or kept for simple testing)
-    print("Demonstrating custom exceptions:")
-
-    try:
-        raise AuthenticationError("Invalid username or password.")
-    except AuthenticationError as e:
-        print(f"Caught: {e}")
-
-    try:
-        raise ConnectionError("Failed to connect to WebSocket server.")
-    except ConnectionError as e:
-        print(f"Caught: {e}")
-
-    try:
-        raise CommandError("Server reported an issue.", error_code=72, server_info="Permission Denied")
-    except CommandError as e:
-        print(f"Caught: {e}")
-        print(f"  Error Code: {e.error_code}")
-        print(f"  Server Info: {e.server_info}")
-
-    try:
-        raise ParameterError("Invalid parameter for command.", error_code=17, server_info="Parameter 'foo' is missing")
-    except ParameterError as e:
-        print(f"Caught: {e}")
-        print(f"  Error Code: {e.error_code}")
-        print(f"  Server Info: {e.server_info}")
-    except CommandError as e: # Should catch ParameterError as well
-        print(f"Caught by CommandError: {e}")
-
-
-    try:
-        raise DeviceNotFoundError("Device with ID '12345' not found.")
-    except DeviceNotFoundError as e:
-        print(f"Caught: {e}")

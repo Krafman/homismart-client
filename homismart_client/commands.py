@@ -11,13 +11,7 @@ from typing import Optional, Dict, Any, List
 # Attempt to import RequestPrefix. If this script is run directly,
 # this might fail, so we handle it for potential direct testing,
 # but in package use, it should be available.
-try:
-    from .enums import RequestPrefix
-except ImportError:
-    # This is to allow the file to be run standalone for simple tests,
-    # assuming enums.py is in the same directory or Python path.
-    # In a real package structure, the relative import above should work.
-    from enums import RequestPrefix
+from .enums import RequestPrefix
 
 class HomismartCommandBuilder:
     """
@@ -201,45 +195,3 @@ class HomismartCommandBuilder:
     # - change_password ("0040")
     # - scenario commands ("0112" - "0142")
     # - etc.
-
-if __name__ == '__main__':
-    # Example usage (can be removed or kept for simple testing)
-    print("Demonstrating HomismartCommandBuilder:")
-
-    login_cmd = HomismartCommandBuilder.build_login_message("user@example.com", "hashed_password_here")
-    print(f"Login Command: {login_cmd}")
-
-    list_devices_cmd = HomismartCommandBuilder.build_list_devices_message()
-    print(f"List Devices Command: {list_devices_cmd}")
-
-    # Example device dict for toggle property
-    # In a real scenario, this would come from a HomismartDevice object's state
-    sample_device_state = {
-        "id": "02518744000162", "name": "Office Light", "power": False,
-        "type": 2, "pid": "some_pid", "consumption": 0, "deviceId": "same_as_id",
-        "version": 1, "onLine": True, "updateTime": 1678886400000, "lock": "1",
-        "lastOn": "", "led": 0, "iconId": "0", "shared": False, "timers": False
-        # Ensure all fields expected by the "0006" command are present
-    }
-    # Simulate toggling power ON
-    toggled_device_state = sample_device_state.copy()
-    toggled_device_state["power"] = True
-    toggled_device_state["updateTime"] = 1678886500000 # New timestamp
-    toggled_device_state["lastOn"] = "2023-03-15 12:01:40" # Example
-
-    toggle_cmd = HomismartCommandBuilder.build_toggle_property_message(toggled_device_state)
-    print(f"Toggle Property Command (0006): {toggle_cmd}")
-
-    modify_cmd = HomismartCommandBuilder.build_modify_device_message(
-        device_id="02518744000162",
-        name="New Office Light Name",
-        lock_status="1",
-        icon_id="5"
-    )
-    print(f"Modify Device Command (0016): {modify_cmd}")
-
-    delete_cmd = HomismartCommandBuilder.build_delete_device_message("02518744000162")
-    print(f"Delete Device Command (0014): {delete_cmd}")
-
-    heartbeat_cmd = HomismartCommandBuilder.build_heartbeat_message()
-    print(f"Heartbeat Command (0072): {heartbeat_cmd}")
