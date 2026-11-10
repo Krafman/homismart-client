@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import random
+import ssl
 import time
 import warnings
 from typing import Any, Coroutine, Dict, Optional
@@ -31,6 +32,21 @@ RECONNECT_MAX_DELAY = 300         # Maximum reconnect delay (5 minutes)
 RECONNECT_BACKOFF_FACTOR = 2.0    # Exponential backoff multiplier
 HEARTBEAT_INTERVAL_SECONDS = 30   # Send a heartbeat if no other messages are sent
 
+_default_ssl_context: Optional[ssl.SSLContext] = None
+
+
+async def _get_default_ssl_context() -> ssl.SSLContext:
+    """Return a shared default TLS context, built off the event loop.
+
+    Loading the system's CA certificates reads files, which would block the
+    event loop; it is done once, in a worker thread.
+    """
+    global _default_ssl_context
+    if _default_ssl_context is None:
+        _default_ssl_context = await asyncio.to_thread(ssl.create_default_context)
+    return _default_ssl_context
+
+
 class HomismartClient:
     """
     The main client for interacting with the Homismart WebSocket API.
@@ -43,6 +59,7 @@ class HomismartClient:
         password: str,
         subdomain: str = DEFAULT_SUBDOMAIN,
         loop: Optional[asyncio.AbstractEventLoop] = None,
+        ssl_context: Optional[ssl.SSLContext] = None,
     ):
         """
         Initializes the HomismartClient.
@@ -53,7 +70,11 @@ class HomismartClient:
             subdomain: The server subdomain. Defaults to "prod".
             loop: Deprecated and ignored. Background tasks always run on the
                 event loop that calls :meth:`connect`.
+            ssl_context: TLS context for the connection. Defaults to a shared
+                default context, built without blocking the event loop.
+                Applications with their own (e.g. Home Assistant) can pass it.
         """
+        self._ssl_context: Optional[ssl.SSLContext] = ssl_context
         if loop is not None:
             warnings.warn(
                 "The 'loop' argument is deprecated and ignored; the running "
@@ -162,7 +183,11 @@ class HomismartClient:
             url_before = self._ws_url
 
             ws = await asyncio.wait_for(
-                websockets.connect(self._ws_url, open_timeout=10),
+                websockets.connect(
+                    self._ws_url,
+                    open_timeout=10,
+                    ssl=self._ssl_context or await _get_default_ssl_context(),
+                ),
                 timeout=remaining,
             )
             self._websocket = ws

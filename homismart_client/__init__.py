@@ -45,7 +45,7 @@ from .exceptions import (
 )
 
 # Read by setup.py; the release workflow overwrites it with the release tag.
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # Libraries should not configure logging; the application decides.
 logging.getLogger(__name__).addHandler(logging.NullHandler())
