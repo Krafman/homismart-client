@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.3.0 — unreleased
+## 0.3.1 — 2026-11-10
+
+### Fixed
+- Connecting no longer blocks the event loop while loading the system's TLS
+  certificates (Home Assistant reported this as a blocking call). The default
+  TLS context is now built once, in a worker thread.
+
+### Added
+- `HomismartClient(..., ssl_context=...)` to use an application's own TLS
+  context, such as Home Assistant's shared one.
+
+## 0.3.0 — 2026-11-10
 
 ### Changed (behaviour)
 - **A wrong password fails immediately.** `connect()` now raises `AuthenticationError`
