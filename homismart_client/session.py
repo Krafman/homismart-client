@@ -8,41 +8,22 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 
 # Attempt to import dependent modules.
-try:
-    from .commands import HomismartCommandBuilder
-    from .devices import (
-        CurtainDevice,
-        HomismartDevice,
-        HomismartHub,
-        LockDevice,
-        SwitchableDevice,
-    )
-    from .enums import DeviceType, ErrorCode, ReceivePrefix, RequestPrefix
-    from .exceptions import (
-        AuthenticationError,
-        CommandError,
-        DeviceNotFoundError,
-        HomismartError,
-        ParameterError,
-    )
-except ImportError:
-    # Fallbacks for standalone development/testing.
-    from commands import HomismartCommandBuilder  # type: ignore
-    from devices import (  # type: ignore
-        CurtainDevice,
-        HomismartDevice,
-        HomismartHub,
-        LockDevice,
-        SwitchableDevice,
-    )
-    from enums import DeviceType, ErrorCode, ReceivePrefix, RequestPrefix  # type: ignore
-    from exceptions import (  # type: ignore
-        AuthenticationError,
-        CommandError,
-        DeviceNotFoundError,
-        HomismartError,
-        ParameterError,
-    )
+from .commands import HomismartCommandBuilder
+from .devices import (
+    CurtainDevice,
+    HomismartDevice,
+    HomismartHub,
+    LockDevice,
+    SwitchableDevice,
+)
+from .enums import DeviceType, ErrorCode, ReceivePrefix, RequestPrefix
+from .exceptions import (
+    AuthenticationError,
+    CommandError,
+    DeviceNotFoundError,
+    HomismartError,
+    ParameterError,
+)
 
 
 if TYPE_CHECKING:
@@ -52,7 +33,15 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Type alias for event listener callbacks
-EventListener = Callable[[Any], None]  # Argument could be device object, error data, etc.
+EventListener = Callable[..., None]  # Argument could be device object, error data, or none.
+
+# Server error codes that mean "these credentials are not accepted".
+# Code 2 confirmed against the live server for a wrong password.
+AUTH_ERROR_CODES = frozenset({
+    ErrorCode.USERNAME_PASSWORD_ERROR,
+    ErrorCode.NOT_REGISTERED_EMAIL,
+    ErrorCode.USER_FORBIDDEN,
+})
 
 
 class HomismartSession:
@@ -83,6 +72,8 @@ class HomismartSession:
             "hub_deleted": [],
             "session_authenticated": [],
             "session_error": [],  # For "9999" errors or other session-level issues
+            "connection_lost": [],  # No arguments. Established connection dropped.
+            "connection_restored": [],  # No arguments. Reconnected and logged in again.
         }
         self._message_handlers: Dict[
             str, Callable[[Dict[str, Any]], None]
@@ -194,14 +185,17 @@ class HomismartSession:
                 logger.info("Terms and conditions need to be accepted.")
                 self._client._schedule_task(self._client._accept_terms_and_conditions())
         else:
-            self._client._is_logged_in = False
-            error_msg = f"Authentication failed. Server response: {data}"
-            logger.error(error_msg)
-            auth_exception = AuthenticationError(error_msg)
-            self._emit_event(
-                "session_error",
-                {"type": "authentication_failed", "data": data, "exception": auth_exception},
-            )
+            self._fail_authentication(f"Authentication failed. Server response: {data}", data)
+
+    def _fail_authentication(self, message: str, data: Dict[str, Any]) -> None:
+        """Reject the pending login and tell listeners why."""
+        logger.error(message)
+        auth_exception = AuthenticationError(message)
+        self._client._fail_login(auth_exception)
+        self._emit_event(
+            "session_error",
+            {"type": "authentication_failed", "data": data, "exception": auth_exception},
+        )
 
     def _handle_device_list(self, device_list_data: List[Dict[str, Any]]) -> None:
         """Handles the "0005" device list response."""
@@ -267,8 +261,8 @@ class HomismartSession:
             elif dt_enum in [
                 DeviceType.SOCKET,
                 DeviceType.SWITCH,
-                DeviceType.SWITCH_MULTI_GANG_A,
-                DeviceType.DOUBLE_SWITCH_OR_SOCKET,
+                DeviceType.WATER_HEATER_SWITCH,
+                DeviceType.TWO_GANG_SWITCH,
                 DeviceType.SOCKET_ALT,
             ]:
                 return SwitchableDevice
@@ -286,8 +280,12 @@ class HomismartSession:
         is_new = False
         if device_id in self._devices:
             device = self._devices[device_id]
-            if not isinstance(device, DeviceClass):
+            if type(device) is not DeviceClass:
+                # Same ID, different kind of device: announce the old object as
+                # deleted before the new one is added, so consumers never hold
+                # two objects (or two entities) for one ID.
                 logger.warning(f"Device {device_id} type changed. Recreating with new class {DeviceClass.__name__}.")
+                self._remove_device(device_id, is_hub=False)
                 device = DeviceClass(session=self, initial_data=device_data)
                 self._devices[device_id] = device
                 is_new = True
@@ -367,8 +365,6 @@ class HomismartSession:
     def _handle_server_error(self, error_data: Dict[str, Any]) -> None:
         """Handles "9999" server error messages."""
         error_code_val = error_data.get("code")
-        error_info = error_data.get("info", "Unknown server error.")
-        logger.error(f"Server error received: Code={error_code_val}, Info='{error_info}'")
 
         error_code_enum = None
         if isinstance(error_code_val, int):
@@ -376,7 +372,20 @@ class HomismartSession:
                 error_code_enum = ErrorCode(error_code_val)
             except ValueError:
                 logger.warning(f"Unknown server error code: {error_code_val}")
-        
+
+        # The server usually sends only a code; fall back to the code's name.
+        default_info = error_code_enum.name if error_code_enum else "Unknown server error."
+        error_info = error_data.get("info") or default_info
+        logger.error(f"Server error received: Code={error_code_val}, Info='{error_info}'")
+
+        # During login, these codes mean the credentials were rejected.
+        if not self._client.is_logged_in and error_code_enum in AUTH_ERROR_CODES:
+            self._fail_authentication(
+                f"Login rejected by server: {error_info} (code {error_code_val})",
+                error_data,
+            )
+            return
+
         exception_to_raise: HomismartError
         if error_code_enum in [ErrorCode.PARAMETER_ERROR]:
             exception_to_raise = ParameterError(
