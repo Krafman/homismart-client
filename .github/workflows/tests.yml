@@ -1,8 +1,11 @@
 name: Tests
 
+# One run per change: on pull requests, and on main after merging.
+# (Not on every branch or tag push, which only duplicated the PR run.)
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
