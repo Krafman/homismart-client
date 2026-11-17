@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.4 — 2026-11-17
+
+### Security
+- **Logs no longer contain credentials or personal details**, at any level.
+  The login request's password hash (which the server accepts in place of the
+  password) was written to the debug log with every outgoing command, so
+  enabling debug logging for a bug report could expose it. Thanks to the Home
+  Assistant reviewers for spotting this.
+- Also redacted: the account email, the account holder's name from the login
+  reply, token fields, and `sharedBy` on shared devices. The login reply is no
+  longer logged at info level, and event arguments are no longer logged.
+- New `homismart_client.utils.redact()` / `redact_message()` for applications
+  that log or export device data (e.g. diagnostics).
+
+If you shared debug logs from an earlier version publicly, change your
+HomiSmart password.
+
 ## 0.3.3 — 2026-11-10
 - Same code as 0.3.2. Earlier releases were withdrawn from PyPI because their
   examples and tests contained data from a real installation; examples and

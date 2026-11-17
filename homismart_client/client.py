@@ -20,7 +20,7 @@ from .enums import RequestPrefix
 from .exceptions import AuthenticationError, ConnectionError
 from .session import HomismartSession
 from .commands import HomismartCommandBuilder
-from .utils import md5_hash
+from .utils import md5_hash, redact, redact_message
 
 
 logger = logging.getLogger(__name__)
@@ -348,7 +348,7 @@ class HomismartClient:
         try:
             async for raw_message in self._websocket:
                 if isinstance(raw_message, str):
-                    logger.debug(f"RECV RAW: {raw_message}")
+                    logger.debug("RECV: %s", redact_message(raw_message))
                     if len(raw_message) >= 4:
                         prefix_str = raw_message[:4]
                         payload_json_str = raw_message[4:]
@@ -363,15 +363,15 @@ class HomismartClient:
                             
                             self._session.dispatch_message(prefix_str, data)
                         except json.JSONDecodeError:
-                            logger.error(f"Failed to parse JSON payload: '{payload_json_str}' for prefix '{prefix_str}'")
-                            self._emit_session_error("json_decode_error", ValueError(f"Invalid JSON: {payload_json_str}"))
+                            logger.error("Failed to parse JSON payload (%d characters) for prefix '%s'", len(payload_json_str), prefix_str)
+                            self._emit_session_error("json_decode_error", ValueError(f"Invalid JSON for prefix {prefix_str}"))
                         except Exception as e:
                             logger.error(f"Error dispatching message (Prefix: {prefix_str}): {e}", exc_info=True)
                             self._emit_session_error("message_dispatch_error", e)
                     else:
                         logger.warning(f"Received message too short to process: '{raw_message}'")
                 else:
-                    logger.warning(f"Received non-text message (type: {type(raw_message)}): {raw_message}")
+                    logger.warning("Received non-text message (type: %s, %d bytes)", type(raw_message).__name__, len(raw_message))
         except ConnectionClosed as e:
             logger.warning(f"WebSocket connection closed by server: Code={e.code}, Reason='{e.reason}'")
             self._emit_session_error("connection_closed_by_server", e)
@@ -455,7 +455,7 @@ class HomismartClient:
         message_str = self._command_builder._build_message(prefix, payload)
 
         try:
-            logger.debug(f"SENT CMD: {prefix.name} ({prefix.value}) | Payload: {json.dumps(payload) if payload else '{}'}")
+            logger.debug("SENT CMD: %s (%s) | Payload: %s", prefix.name, prefix.value, json.dumps(redact(payload or {})))
             await ws.send(message_str)
             self._last_message_sent_time = time.time()
         except WebSocketException as e:
@@ -469,7 +469,7 @@ class HomismartClient:
 
     async def _login(self) -> None:
         """Sends the login command to the server."""
-        logger.info(f"Attempting to log in as {self._username}...")
+        logger.info("Logging in...")
         try:
             await self.send_command_raw(
                 RequestPrefix.LOGIN,

@@ -17,6 +17,7 @@ from .devices import (
     SwitchableDevice,
 )
 from .enums import DeviceType, ErrorCode, ReceivePrefix, RequestPrefix
+from .utils import redact
 from .exceptions import (
     AuthenticationError,
     CommandError,
@@ -132,7 +133,7 @@ class HomismartSession:
     def _emit_event(self, event_name: str, *args: Any) -> None:
         """Emits an event, calling all registered listeners."""
         if event_name in self._event_listeners:
-            logger.debug("Emitting event '%s' with args: %s", event_name, args)
+            logger.debug("Emitting event '%s'", event_name)  # args can hold personal data
             for callback in list(self._event_listeners[event_name]):
                 try:
                     callback(*args)
@@ -150,7 +151,7 @@ class HomismartSession:
         Dispatches incoming messages from the client to appropriate handlers
         based on the message prefix.
         """
-        logger.debug("Dispatching message: Prefix='%s', Data='%s'", prefix_str, data)
+        logger.debug("Dispatching message: Prefix='%s', Data='%s'", prefix_str, redact(data))
         handler = self._message_handlers.get(prefix_str)
         if handler:
             try:
@@ -159,7 +160,7 @@ class HomismartSession:
                 logger.error(
                     "Error processing message (Prefix: %s, Data: %s): %s",
                     prefix_str,
-                    data,
+                    redact(data),
                     e,
                     exc_info=True,
                 )
@@ -168,24 +169,24 @@ class HomismartSession:
                     {"type": "message_handling_error", "prefix": prefix_str, "exception": e},
                 )
         else:
-            logger.warning("No handler found for message prefix: '%s'. Data: %s", prefix_str, data)
+            logger.warning("No handler found for message prefix: '%s'. Data: %s", prefix_str, redact(data))
 
     def _handle_login_response(self, data: Dict[str, Any]) -> None:
         """Handles the "0003" login response."""
-        logger.info("Handling login response: %s", data)
+        logger.debug("Login response: %s", redact(data))
         if data.get("result") is True:
             self._client._is_logged_in = True
             self._client._reconnect_attempt = 0  # Reset backoff on successful login
             self._client._login_event.set()       # Unblock connect() / _open_and_login()
             username = self._client._username
-            logger.info("Login successful for user: %s", username)
+            logger.info("Login successful.")
             self._emit_event("session_authenticated", username)
             self._client._schedule_task(self._client._request_device_list())
             if data.get("shouldConfirmTerms") == 1:
                 logger.info("Terms and conditions need to be accepted.")
                 self._client._schedule_task(self._client._accept_terms_and_conditions())
         else:
-            self._fail_authentication(f"Authentication failed. Server response: {data}", data)
+            self._fail_authentication(f"Authentication failed. Server response: {redact(data)}", data)
 
     def _fail_authentication(self, message: str, data: Dict[str, Any]) -> None:
         """Reject the pending login and tell listeners why."""
@@ -213,7 +214,7 @@ class HomismartSession:
 
         for device_data in device_list_data:
             if not isinstance(device_data, dict) or "id" not in device_data:
-                logger.warning(f"Skipping invalid device data entry: {device_data}")
+                logger.warning("Skipping invalid device data entry: %s", redact(device_data))
                 continue
             
             device_id = device_data["id"]
@@ -237,7 +238,7 @@ class HomismartSession:
     def _handle_device_update_push(self, device_data: Dict[str, Any]) -> None:
         """Handles the "0009" individual device update push."""
         if not isinstance(device_data, dict) or "id" not in device_data:
-            logger.warning(f"Skipping invalid device push update data: {device_data}")
+            logger.warning("Skipping invalid device push update data: %s", redact(device_data))
             return
         
         logger.info(f"Received push update for device ID: {device_data['id']}")
@@ -331,7 +332,7 @@ class HomismartSession:
 
     def _handle_add_device_response(self, data: Dict[str, Any]) -> None:
         """Handles "0013" Add Device response."""
-        logger.info(f"Add device response: {data}")
+        logger.info("Add device response: %s", redact(data))
         if data.get("result") is True and "status" in data and isinstance(data["status"], dict):
             device_data = data["status"]
             if "id" in device_data:
@@ -342,11 +343,11 @@ class HomismartSession:
             else:
                 logger.warning("Add device response 'status' missing 'id'.")
         else:
-            logger.error(f"Failed to add device. Server response: {data}")
+            logger.error("Failed to add device. Server response: %s", redact(data))
 
     def _handle_delete_device_response(self, data: Dict[str, Any]) -> None:
         """Handles "0015" Delete Device response."""
-        logger.info(f"Delete device response: {data}")
+        logger.info("Delete device response: %s", redact(data))
         if data.get("result") is True and "status" in data and isinstance(data["status"], dict):
             device_id_data = data["status"]
             device_id = device_id_data.get("id")
@@ -360,7 +361,7 @@ class HomismartSession:
             else:
                 logger.warning("Delete device response 'status' missing 'id'.")
         else:
-            logger.error(f"Failed to delete device. Server response: {data}")
+            logger.error("Failed to delete device. Server response: %s", redact(data))
 
     def _handle_server_error(self, error_data: Dict[str, Any]) -> None:
         """Handles "9999" server error messages."""
@@ -428,7 +429,7 @@ class HomismartSession:
     ) -> None:
         """Generic method for device objects to request sending a command."""
         logger.debug(
-            f"Session: Received request to send command '{command_type}' for device '{device_id}' with payload: {command_payload}"
+            "Session: Received request to send command '%s' for device '%s' with payload: %s", command_type, device_id, redact(command_payload)
         )
         
         try:
