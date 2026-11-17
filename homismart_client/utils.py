@@ -33,6 +33,9 @@ SENSITIVE_KEYS = frozenset(
         "username",
         "email",
         "realname",
+        "name",  # device, hub and room names are often people's names
+        "macaddr",
+        "mac",
         "sharedby",
         "token",
         "accesstoken",
@@ -65,5 +68,5 @@ def redact_message(raw: str) -> str:
         return raw
     try:
         return prefix + json.dumps(redact(json.loads(body)))
-    except ValueError:
+    except (ValueError, RecursionError):
         return f"{prefix}<{len(body)} characters, not JSON>"

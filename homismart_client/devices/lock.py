@@ -36,7 +36,7 @@ class LockDevice(HomismartDevice):
             initial_data: The initial dictionary of data for this device.
         """
         super().__init__(session, initial_data)
-        logger.debug(f"LockDevice initialized: ID='{self.id}', Name='{self.name}'")
+        logger.debug(f"LockDevice initialized: ID='{self.id}'")
 
     @property
     def is_locked(self) -> Optional[bool]:
@@ -59,7 +59,7 @@ class LockDevice(HomismartDevice):
         This uses the "0016" MODIFY_DEVICE command, setting 'lock' to "2".
         Always sent, even if the cached state already says locked.
         """
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to lock.")
+        logger.debug(f"Device {self.id}: Attempting to lock.")
         # The _execute_modify_command in HomismartDevice constructs the payload
         # with current name and iconId if not provided.
         await self._execute_modify_command(lock_status=LOCK_STATE_LOCKED)
@@ -70,7 +70,7 @@ class LockDevice(HomismartDevice):
         This uses the "0016" MODIFY_DEVICE command, setting 'lock' to "1".
         Always sent, even if the cached state already says unlocked.
         """
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to unlock.")
+        logger.debug(f"Device {self.id}: Attempting to unlock.")
         await self._execute_modify_command(lock_status=LOCK_STATE_UNLOCKED)
 
     # Door locks might have an 'operationTime' property, as seen in TableModel.js
@@ -86,7 +86,7 @@ class LockDevice(HomismartDevice):
     #     Args:
     #         duration_seconds: The desired operation time in seconds.
     #     """
-    #     logger.info(f"Device {self.id} ('{self.name}'): Attempting to set operation time to {duration_seconds}s.")
+    #     logger.debug(f"Device {self.id}: Attempting to set operation time to {duration_seconds}s.")
     #     # The exact payload structure for "0156" needs to be confirmed from SocketFunctions.maxWorkTime(e)
     #     # Assuming 'e' is a dict like {"id": self.id, "operationTime": duration_seconds}
     #     payload = {

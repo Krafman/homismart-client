@@ -192,7 +192,8 @@ class HomismartDevice:
         Args:
             new_data: A dictionary containing the new state information.
         """
-        logger.debug("Device %s: Updating state. Current raw: %s, New data: %s", self.id, redact(self._raw_data), redact(new_data))
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Device %s: Updating state. Current raw: %s, New data: %s", self.id, redact(self._raw_data), redact(new_data))
 
         # Work on a copy to avoid mutating the caller's dict.
         merged = dict(new_data)
@@ -216,7 +217,7 @@ class HomismartDevice:
             logger.warning(f"Device {self.id}: ID changed to {new_data['id']} during update. This is highly unusual.")
             self.id = new_data['id'] # Update the primary ID attribute
         
-        logger.info(f"Device {self.id} ('{self.name}'): State updated.")
+        logger.debug(f"Device {self.id}: State updated.")
         # The session might emit a "device_updated" event here
         self._session._notify_device_update(self)
 
@@ -281,7 +282,7 @@ class HomismartDevice:
         if not name or not isinstance(name, str):
             logger.error(f"Device {self.id}: Invalid name provided for set_name: '{name}'")
             raise ValueError("Device name must be a non-empty string.")
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to set name to '{name}'.")
+        logger.debug(f"Device {self.id}: Attempting to set a new name.")
         await self._execute_modify_command(name=name)
 
     async def set_icon(self, icon_id: str) -> None:
@@ -290,7 +291,7 @@ class HomismartDevice:
         if not isinstance(icon_id, str):
             logger.error(f"Device {self.id}: Invalid icon_id provided for set_icon: '{icon_id}'")
             raise ValueError("Icon ID must be a string.")
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to set icon ID to '{icon_id}'.")
+        logger.debug(f"Device {self.id}: Attempting to set icon ID to '{icon_id}'.")
         await self._execute_modify_command(icon_id=icon_id)
 
     async def set_led_state(self, led_percentage: int) -> None:
@@ -302,7 +303,7 @@ class HomismartDevice:
             raise ValueError("LED percentage must be between 0 and 100.")
 
         logger.info(
-            f"Device {self.id} ('{self.name}'): Attempting to set LED state to {led_percentage}%."
+            f"Device {self.id}: Attempting to set LED state to {led_percentage}%."
         )
 
         led_payload = {"devid": self.id, "ledDevice": led_percentage}
@@ -316,7 +317,7 @@ class HomismartDevice:
         """
         Deletes the device from the account. This uses the "0014" DELETE_DEVICE command.
         """
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to delete.")
+        logger.debug(f"Device {self.id}: Attempting to delete.")
         # Payload for "0014" is {"devid": self.id}
         delete_payload = {"devid": self.id}
         await self._session._send_command_for_device(

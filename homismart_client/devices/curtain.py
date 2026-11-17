@@ -44,7 +44,7 @@ class CurtainDevice(HomismartDevice):
             initial_data: The initial dictionary of data for this device.
         """
         super().__init__(session, initial_data)
-        logger.debug(f"CurtainDevice initialized: ID='{self.id}', Name='{self.name}'")
+        logger.debug(f"CurtainDevice initialized: ID='{self.id}'")
 
     @property
     def current_level(self) -> Optional[int]:
@@ -119,18 +119,18 @@ class CurtainDevice(HomismartDevice):
             logger.error(f"Device {self.id}: Invalid curtain level '{level_percentage}'. Must be 0-100.")
             raise ValueError("Curtain level must be between 0 and 100.")
 
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to set level to {level_percentage}%.")
+        logger.debug(f"Device {self.id}: Attempting to set level to {level_percentage}%.")
         # "0006" with curtainState as a number: some devices ignore it as text.
         await self._execute_control_command({"curtainState": level_percentage})
 
     async def open_fully(self) -> None:
         """Fully opens the curtain (sets level to 0%)."""
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to fully open.")
+        logger.debug(f"Device {self.id}: Attempting to fully open.")
         await self.set_level(CURTAIN_STATE_OPEN_PERCENT)
 
     async def close_fully(self) -> None:
         """Fully closes the curtain (sets level to 100%)."""
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to fully close.")
+        logger.debug(f"Device {self.id}: Attempting to fully close.")
         await self.set_level(CURTAIN_STATE_CLOSED_PERCENT)
 
     async def stop(self) -> None:
@@ -138,7 +138,7 @@ class CurtainDevice(HomismartDevice):
         Stops the curtain's movement.
         This sends a specific 'curtainState' value, observed as '99' in JS.
         """
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to stop movement.")
+        logger.debug(f"Device {self.id}: Attempting to stop movement.")
         await self._execute_control_command({"curtainState": CURTAIN_STATE_STOP})
 
     async def set_closed_position_calibration(self, position: int) -> None:
@@ -157,7 +157,7 @@ class CurtainDevice(HomismartDevice):
              logger.error(f"Device {self.id}: Invalid closed position calibration value '{position}'. Expected 0-10.")
              raise ValueError("Closed position calibration value must be an integer between 0 and 10.")
 
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to set closed position calibration to {position}.")
+        logger.debug(f"Device {self.id}: Attempting to set closed position calibration to {position}.")
         
         payload = {
             "deviceSN": self.id, # SocketFunctions.js used deviceSN

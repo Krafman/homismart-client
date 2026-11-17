@@ -15,7 +15,8 @@ PASSWORD_HASH = hashlib.md5(PASSWORD.encode()).hexdigest()
 REAL_NAME = "Jane Example"
 SHARER = "sharer@example.com"
 
-SECRETS = (USERNAME, PASSWORD, PASSWORD_HASH, REAL_NAME, SHARER)
+DEVICE_NAME = "Hall socket"
+SECRETS = (USERNAME, PASSWORD, PASSWORD_HASH, REAL_NAME, SHARER, DEVICE_NAME)
 
 
 @pytest.mark.asyncio
@@ -62,11 +63,11 @@ async def test_rejected_login_error_has_no_secrets(caplog):
 def test_redact_handles_nesting_case_and_lists():
     data = {
         "Password": "x", "list": [{"sharedBy": "a@b.c"}, 3], "nested": {"realName": "N"},
-        "name": "Hall light",
+        "name": "Hall light", "type": 2,
     }
     assert redact(data) == {
         "Password": REDACTED, "list": [{"sharedBy": REDACTED}, 3],
-        "nested": {"realName": REDACTED}, "name": "Hall light",
+        "nested": {"realName": REDACTED}, "name": REDACTED, "type": 2,
     }
     assert data["Password"] == "x"  # the original is untouched
 

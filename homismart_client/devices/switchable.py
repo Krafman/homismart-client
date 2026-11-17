@@ -33,7 +33,7 @@ class SwitchableDevice(HomismartDevice):
             initial_data: The initial dictionary of data for this device.
         """
         super().__init__(session, initial_data)
-        logger.debug(f"SwitchableDevice initialized: ID='{self.id}', Name='{self.name}'")
+        logger.debug(f"SwitchableDevice initialized: ID='{self.id}'")
 
 
     async def turn_on(self) -> None:
@@ -45,7 +45,7 @@ class SwitchableDevice(HomismartDevice):
         the cache can be stale (e.g. after a dropped connection), and the
         server's push update is the source of truth.
         """
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to turn ON.")
+        logger.debug(f"Device {self.id}: Attempting to turn ON.")
         # 'lastOn' should be updated when turning on, format from prototype: "YYYY-MM-DD HH:MM:SS"
         current_time_str = time.strftime("%Y-%m-%d %H:%M:%S")
         await self._execute_control_command({"power": True, "lastOn": current_time_str})
@@ -56,7 +56,7 @@ class SwitchableDevice(HomismartDevice):
         This uses the "0006" TOGGLE_PROPERTY command.
         Always sent, even if the cached state already says OFF (see turn_on).
         """
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to turn OFF.")
+        logger.debug(f"Device {self.id}: Attempting to turn OFF.")
         # 'lastOn' is typically not updated when turning off, but the 'power' field is.
         await self._execute_control_command({"power": False})
 

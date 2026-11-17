@@ -408,3 +408,85 @@ def test_to_app_types_leaves_real_text_and_existing_power_alone():
 
     typed = to_app_types({"lock": "2", "power": True, "lastOn": "2026-11-10 18:33:10", "led": "x"})
     assert typed == {"lock": 2, "power": True, "lastOn": "2026-11-10 18:33:10", "led": "x"}
+
+
+# --- Terms and conditions (0.3.4) -------------------------------------------
+
+@pytest.mark.asyncio
+async def test_terms_are_never_accepted_on_the_users_behalf():
+    """The server asking for terms acceptance raises an event; nothing is sent."""
+    client = HomismartClient("user@example.com", "pw")
+    events = []
+    client.session.register_event_listener("terms_acceptance_required", lambda: events.append(True))
+    ws = FakeWS(['0003{"result": true, "shouldConfirmTerms": 1}'])
+    with _patch_connect(ws):
+        await client.connect(timeout=5)
+        await _wait_for(lambda: events)
+        await asyncio.sleep(0.05)
+    assert not [m for m in ws.sent if m.startswith("0222")]  # no acceptance sent
+    assert client.is_logged_in
+    await client.disconnect()
+
+
+# --- Review hardening (0.3.4) -----------------------------------------------
+
+@pytest.mark.parametrize(
+    "host, expected",
+    [
+        ("10.0.0.5", "10.0.0.5"),
+        ("2001:db8::1", "[2001:db8::1]"),
+        ("eu.homismart.com", "eu.homismart.com"),
+        ("EU.HomiSmart.com", "eu.homismart.com"),
+        ("evil.example/x#", None),
+        ("user@evil.example", None),
+        ("homismart.com.evil.example", None),
+        ("evil.example", None),
+        ("10.0.0.5:8443", None),
+        (None, None),
+    ],
+)
+def test_redirect_only_to_an_ip_or_homismart_host(host, expected):
+    from homismart_client.client import _valid_redirect_host
+
+    assert _valid_redirect_host(host) == expected
+
+
+@pytest.mark.asyncio
+async def test_redirect_to_unexpected_host_is_ignored():
+    client = HomismartClient("user@example.com", "pw")
+    ws = FakeWS([LOGIN_OK])
+    with _patch_connect(ws):
+        await client.connect(timeout=5)
+        url = client._ws_url
+        ws.push('0039{"ip": "evil.example/x#", "port": "443"}')
+        await asyncio.sleep(0.05)
+        assert client._ws_url == url and client.is_connected
+    await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_empty_device_list_keeps_known_devices():
+    client = HomismartClient("user@example.com", "pw")
+    deleted = []
+    client.session.register_event_listener("device_deleted", deleted.append)
+    ws = FakeWS([LOGIN_OK])
+    with _patch_connect(ws):
+        await client.connect(timeout=5)
+        ws.push(_device_list({"id": "01000000000001", "type": 1}))
+        await _wait_for(lambda: client.session.get_device_by_id("01000000000001"))
+        ws.push(_device_list())
+        await asyncio.sleep(0.05)
+    assert client.session.get_device_by_id("01000000000001") is not None
+    assert not deleted
+    await client.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_cancels_helper_tasks(caplog):
+    client = HomismartClient("user@example.com", "pw")
+    with _patch_connect(FakeWS([LOGIN_OK])):
+        await client.connect(timeout=5)
+        await client.disconnect()  # straight away, as a config flow check does
+    await asyncio.sleep(0.05)
+    assert not client._tasks
+    assert "Cannot request device list" not in caplog.text

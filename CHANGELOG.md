@@ -13,9 +13,30 @@
   longer logged at info level, and event arguments are no longer logged.
 - New `homismart_client.utils.redact()` / `redact_message()` for applications
   that log or export device data (e.g. diagnostics).
+- Device, hub and room names are no longer logged (they are often people's
+  names), and `redact()` hides them along with MAC addresses. Routine
+  messages moved from info to debug level.
 
 If you shared debug logs from an earlier version publicly, change your
 HomiSmart password.
+
+### Fixed
+- Server redirects are only followed to a plain IP address or a
+  `*.homismart.com` host, and a failed reconnect falls back to the default
+  server instead of retrying a dead redirect target forever.
+- An empty device list from the server no longer removes every device.
+- Background helper tasks are kept referenced and cancelled by
+  `disconnect()`, so nothing keeps running after an application unloads.
+- Debug-only redaction work is skipped when debug logging is off, and
+  deeply nested messages can no longer break the receive loop.
+- A rejected login's error message no longer includes server data.
+
+### Changed
+- **Terms and conditions are never accepted on the user's behalf.** When the
+  server asks for acceptance, the client logs a warning and emits a
+  `terms_acceptance_required` event; earlier versions accepted automatically.
+  Apps that show the terms and get the user's consent can call
+  `accept_terms_and_conditions()`.
 
 ## 0.3.3 — 2026-11-10
 - Same code as 0.3.2. Earlier releases were withdrawn from PyPI because their
