@@ -39,7 +39,7 @@ class HomismartHub(HomismartDevice):
                 f"HomismartHub initialized with ID '{self.id}' which does not start with '00'. "
                 "This might not be a typical hub device."
             )
-        logger.debug(f"HomismartHub initialized: ID='{self.id}', Name='{self.name}'")
+        logger.debug(f"HomismartHub initialized: ID='{self.id}'")
 
     # Hub-specific properties or methods can be added here if needed.
     # For example, if hubs have unique attributes not covered by HomismartDevice:

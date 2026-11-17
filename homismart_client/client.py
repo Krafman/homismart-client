@@ -5,9 +5,11 @@ Defines the HomismartClient class, the main entry point for interacting
 with the Homismart WebSocket API.
 """
 import asyncio
+import ipaddress
 import json
 import logging
 import random
+import re
 import ssl
 import time
 import warnings
@@ -20,7 +22,7 @@ from .enums import RequestPrefix
 from .exceptions import AuthenticationError, ConnectionError
 from .session import HomismartSession
 from .commands import HomismartCommandBuilder
-from .utils import md5_hash
+from .utils import md5_hash, redact, redact_message
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +47,24 @@ async def _get_default_ssl_context() -> ssl.SSLContext:
     if _default_ssl_context is None:
         _default_ssl_context = await asyncio.to_thread(ssl.create_default_context)
     return _default_ssl_context
+
+
+def _valid_redirect_host(host: Any) -> Optional[str]:
+    """Return the host to connect to for a server redirect, or None if unexpected.
+
+    Only a plain IP address or a *.homismart.com name is accepted, so a
+    redirect can't smuggle a path, port or credentials into the URL. TLS
+    verification still applies to whatever host is accepted.
+    """
+    if not isinstance(host, str):
+        return None
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        if re.fullmatch(r"(?:[a-z0-9-]+\.)+homismart\.com", host.lower()):
+            return host.lower()
+        return None
+    return f"[{address}]" if address.version == 6 else str(address)
 
 
 class HomismartClient:
@@ -88,6 +108,8 @@ class HomismartClient:
         self._ws_url: str = WEBSOCKET_URL_TEMPLATE.format(subdomain=self._subdomain)
 
         self._websocket: Optional[Any] = None
+        self._default_ws_url: str = self._ws_url
+        self._tasks: set = set()  # helper tasks, cancelled on disconnect
         self._session: HomismartSession = HomismartSession(self) # Client provides itself to session
         self._command_builder: HomismartCommandBuilder = HomismartCommandBuilder()
 
@@ -141,7 +163,7 @@ class HomismartClient:
         self._keep_running = True
         self._reconnect_attempt = 0
         self._login_event = asyncio.Event()
-        logger.info("Starting Homismart client...")
+        logger.debug("Starting Homismart client...")
 
         try:
             # First connection attempt — with a caller-visible timeout.
@@ -177,7 +199,7 @@ class HomismartClient:
                     f"Login did not complete within {timeout}s"
                 )
 
-            logger.info(f"Attempting to connect to WebSocket: {self._ws_url}")
+            logger.debug(f"Attempting to connect to WebSocket: {self._ws_url}")
             self._login_event.clear()
             self._login_error = None
             url_before = self._ws_url
@@ -192,7 +214,7 @@ class HomismartClient:
             )
             self._websocket = ws
             self._is_connected = True
-            logger.info(f"WebSocket connection established to {self._ws_url}.")
+            logger.debug(f"WebSocket connection established to {self._ws_url}.")
 
             # Start receive loop as a task so it can process the login response.
             self._receive_task = asyncio.create_task(self._receive_loop())
@@ -201,21 +223,16 @@ class HomismartClient:
 
             # Wait for either login success or the receive loop ending (redirect / error).
             login_wait = asyncio.ensure_future(self._login_event.wait())
-
-            done, pending = await asyncio.wait(
-                [login_wait, self._receive_task],
-                timeout=max(deadline - asyncio.get_running_loop().time(), 1.0),
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-
-            # Cancel the login_wait if it didn't finish, but never cancel
-            # _receive_task here — it must keep running after login.
-            if login_wait in pending:
+            try:
+                await asyncio.wait(
+                    [login_wait, self._receive_task],
+                    timeout=max(deadline - asyncio.get_running_loop().time(), 1.0),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            finally:
+                # Never leave the waiter behind (also when we are cancelled).
+                # _receive_task is deliberately kept: it runs on after login.
                 login_wait.cancel()
-                try:
-                    await login_wait
-                except asyncio.CancelledError:
-                    pass
 
             if self._login_error is not None:
                 # Server rejected the credentials: no point retrying.
@@ -305,7 +322,9 @@ class HomismartClient:
                 logger.error(f"Reconnect attempt failed: {e}", exc_info=False)
                 self._emit_session_error("connection_operational_error", e)
                 await self._cleanup_connection()
-                # Loop continues — will retry with next backoff delay.
+                # A redirect target may be gone; the default server will
+                # redirect again if needed. Retry with the next backoff delay.
+                self._ws_url = self._default_ws_url
 
         logger.info("Reconnect loop stopped.")
 
@@ -332,7 +351,7 @@ class HomismartClient:
 
     async def _on_open(self) -> None:
         """Called when the WebSocket connection is successfully opened."""
-        logger.info("WebSocket connection opened. Initiating login sequence.")
+        logger.debug("WebSocket connection opened. Initiating login sequence.")
         # Reset login status before attempting new login
         self._is_logged_in = False
         await self._login()
@@ -344,11 +363,12 @@ class HomismartClient:
             logger.error("Receive loop called without an active WebSocket connection.")
             return
 
-        logger.info("Starting to listen for incoming messages...")
+        logger.debug("Starting to listen for incoming messages...")
         try:
             async for raw_message in self._websocket:
                 if isinstance(raw_message, str):
-                    logger.debug(f"RECV RAW: {raw_message}")
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug("RECV: %s", redact_message(raw_message))
                     if len(raw_message) >= 4:
                         prefix_str = raw_message[:4]
                         payload_json_str = raw_message[4:]
@@ -363,15 +383,15 @@ class HomismartClient:
                             
                             self._session.dispatch_message(prefix_str, data)
                         except json.JSONDecodeError:
-                            logger.error(f"Failed to parse JSON payload: '{payload_json_str}' for prefix '{prefix_str}'")
-                            self._emit_session_error("json_decode_error", ValueError(f"Invalid JSON: {payload_json_str}"))
+                            logger.error("Failed to parse JSON payload (%d characters) for prefix '%s'", len(payload_json_str), prefix_str)
+                            self._emit_session_error("json_decode_error", ValueError(f"Invalid JSON for prefix {prefix_str}"))
                         except Exception as e:
                             logger.error(f"Error dispatching message (Prefix: {prefix_str}): {e}", exc_info=True)
                             self._emit_session_error("message_dispatch_error", e)
                     else:
                         logger.warning(f"Received message too short to process: '{raw_message}'")
                 else:
-                    logger.warning(f"Received non-text message (type: {type(raw_message)}): {raw_message}")
+                    logger.warning("Received non-text message (type: %s, %d bytes)", type(raw_message).__name__, len(raw_message))
         except ConnectionClosed as e:
             logger.warning(f"WebSocket connection closed by server: Code={e.code}, Reason='{e.reason}'")
             self._emit_session_error("connection_closed_by_server", e)
@@ -455,7 +475,8 @@ class HomismartClient:
         message_str = self._command_builder._build_message(prefix, payload)
 
         try:
-            logger.debug(f"SENT CMD: {prefix.name} ({prefix.value}) | Payload: {json.dumps(payload) if payload else '{}'}")
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug("SENT CMD: %s (%s) | Payload: %s", prefix.name, prefix.value, json.dumps(redact(payload or {})))
             await ws.send(message_str)
             self._last_message_sent_time = time.time()
         except WebSocketException as e:
@@ -469,7 +490,7 @@ class HomismartClient:
 
     async def _login(self) -> None:
         """Sends the login command to the server."""
-        logger.info(f"Attempting to log in as {self._username}...")
+        logger.debug("Logging in...")
         try:
             await self.send_command_raw(
                 RequestPrefix.LOGIN,
@@ -487,7 +508,7 @@ class HomismartClient:
         if not self._is_logged_in:
             logger.warning("Cannot request device list: Not logged in.")
             return
-        logger.info("Requesting device list from server...")
+        logger.debug("Requesting device list from server...")
         try:
             await self.send_command_raw(RequestPrefix.LIST_DEVICES, {})
         except ConnectionError:
@@ -496,13 +517,14 @@ class HomismartClient:
             logger.error(f"An unexpected error occurred during device list request: {e}", exc_info=True)
             self._emit_session_error("device_list_request_error", e)
             
-    async def _accept_terms_and_conditions(self) -> None:
-        """Sends the command to accept terms and conditions."""
-        if not self._is_logged_in: # Or maybe this can be sent before full login? Check JS flow.
-                                   # SocketMsgContainer showed it after lre, before flre (list devices)
-            logger.warning("Cannot accept terms: Not logged in (or login not fully processed).")
-            # return # Let's assume it can be sent if connection is open
-        logger.info("Sending command to accept terms and conditions...")
+    async def accept_terms_and_conditions(self) -> None:
+        """Accept HomiSmart's terms and conditions for this account.
+
+        Only call this after the account holder has explicitly agreed to the
+        terms (e.g. after showing them and asking). The client never calls it
+        by itself; it emits ``terms_acceptance_required`` instead.
+        """
+        logger.info("Sending acceptance of terms and conditions...")
         try:
             await self.send_command_raw(RequestPrefix.ACCEPT_TERMS_CONDITIONS, {})
         except ConnectionError:
@@ -517,27 +539,37 @@ class HomismartClient:
         Handles server redirection by updating the WebSocket URL and
         triggering a reconnection (which includes re-login).
         """
-        logger.info(f"Handling redirection: New IP='{new_ip}', New Port='{new_port}'.")
+        host = _valid_redirect_host(new_ip)
+        if host is None:
+            logger.warning("Ignoring redirect to an unexpected host: %r", new_ip)
+            return
 
         # Vendor JS always uses port 443 for WSS: wss://<ip>:443/homismartmain/websocket
-        self._ws_url = f"wss://{new_ip}:443/homismartmain/websocket"
-        logger.info(f"Updated WebSocket URL for redirection: {self._ws_url}")
+        self._ws_url = f"wss://{host}:443/homismartmain/websocket"
+        logger.info("Redirected by the server to %s", self._ws_url)
 
         if self._websocket and self._is_connected:
-            logger.info("Closing current connection to redirect...")
+            logger.debug("Closing current connection to redirect...")
             await self._websocket.close(code=1000, reason="Client redirecting")
             # The reconnect loop will detect the closed connection and
             # reconnect using the new URL.
         else:
-            logger.info("Not currently connected, next connection attempt will use the new URL.")
+            logger.debug("Not currently connected, next connection attempt will use the new URL.")
 
 
     async def disconnect(self) -> None:
         """
         Disconnects from the WebSocket server and stops reconnection attempts.
         """
-        logger.info("Disconnect requested. Stopping client...")
+        logger.debug("Disconnect requested. Stopping client...")
         self._keep_running = False
+
+        # Cancel helper tasks (device list requests, redirects, ...).
+        for task in list(self._tasks):
+            task.cancel()
+        if self._tasks:
+            await asyncio.gather(*self._tasks, return_exceptions=True)
+        self._tasks.clear()
 
         # Cancel background tasks.
         for task_attr in ("_heartbeat_task", "_receive_task", "_reconnect_task"):
@@ -562,7 +594,7 @@ class HomismartClient:
         self._is_connected = False
         self._is_logged_in = False
         self._websocket = None
-        logger.info("Client disconnect process complete.")
+        logger.debug("Client disconnect process complete.")
 
     async def __aenter__(self) -> "HomismartClient":
         """Connect on entering ``async with HomismartClient(...) as client``."""
@@ -580,8 +612,11 @@ class HomismartClient:
         self._login_event.set()  # Unblock _open_and_login so it can raise.
 
     def _schedule_task(self, coro: Coroutine[Any, Any, Any]) -> "asyncio.Task[Any]":
-        """Schedule a coroutine on the running event loop."""
-        return asyncio.create_task(coro)
+        """Run a helper coroutine; it is kept referenced and cancelled on disconnect."""
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
 
     def _emit_session_error(self, error_type: str, exception_obj: Exception) -> None:
         """Emits a session_error event via the session."""

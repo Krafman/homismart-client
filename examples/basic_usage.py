@@ -153,7 +153,7 @@ async def main_example():
             logger.info(f"  Switchable device '{device_obj.name}' power state: {'ON' if device_obj.is_on else 'OFF'}")
 
     def on_session_authenticated(auth_username: str):
-        logger.info(f"EVENT [Session Authenticated]: Successfully logged in as {auth_username}.")
+        logger.info("EVENT [Session Authenticated]: Successfully logged in.")
 
     def on_session_error(error_details: dict):
         logger.error(
@@ -169,7 +169,7 @@ async def main_example():
 
     connect_task = None
     try:
-        logger.info(f"Attempting to connect client for user: {username}...")
+        logger.info("Connecting...")
         connect_task = asyncio.create_task(client.connect())
 
         logger.info("Waiting for authentication...")

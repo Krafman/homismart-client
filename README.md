@@ -106,6 +106,7 @@ client.session.register_event_listener("device_updated", lambda d: print(d))
 | `session_authenticated` | username | Login succeeded (also after each reconnect). |
 | `connection_lost` | — | An established connection dropped; reconnecting has started. |
 | `connection_restored` | — | Reconnected and logged in again. |
+| `terms_acceptance_required` | — | HomiSmart asks the account holder to accept new terms. The client never accepts for them; accept in the HomiSmart app, or call `accept_terms_and_conditions()` after the user agreed. |
 | `session_error` | dict with `type` | Server or connection errors. `type == "authentication_failed"` means the credentials were rejected; the client then stops reconnecting. |
 
 ## Reconnection

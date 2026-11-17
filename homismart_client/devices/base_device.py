@@ -8,9 +8,7 @@ import time
 import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
-# Enums will be imported by the session/client and resolved there,
-# or passed as arguments if needed to avoid circular dependencies at this stage.
-# from ..enums import DeviceType, RequestPrefix # For final package structure
+from ..utils import redact
 
 if TYPE_CHECKING:
     # This import is only for type hinting and avoids circular dependencies
@@ -61,7 +59,7 @@ class HomismartDevice:
         
         if 'id' not in initial_data:
             # Log a warning or raise error if essential data is missing
-            logger.error("Device initialized with missing 'id' in initial_data: %s", initial_data)
+            logger.error("Device initialized with missing 'id' in initial_data: %s", redact(initial_data))
             raise ValueError("Initial device data must contain an 'id'.")
         
         self.id: str = initial_data['id']
@@ -194,7 +192,8 @@ class HomismartDevice:
         Args:
             new_data: A dictionary containing the new state information.
         """
-        logger.debug(f"Device {self.id}: Updating state. Current raw: {self._raw_data}, New data: {new_data}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug("Device %s: Updating state. Current raw: %s, New data: %s", self.id, redact(self._raw_data), redact(new_data))
 
         # Work on a copy to avoid mutating the caller's dict.
         merged = dict(new_data)
@@ -218,7 +217,7 @@ class HomismartDevice:
             logger.warning(f"Device {self.id}: ID changed to {new_data['id']} during update. This is highly unusual.")
             self.id = new_data['id'] # Update the primary ID attribute
         
-        logger.info(f"Device {self.id} ('{self.name}'): State updated.")
+        logger.debug(f"Device {self.id}: State updated.")
         # The session might emit a "device_updated" event here
         self._session._notify_device_update(self)
 
@@ -238,7 +237,7 @@ class HomismartDevice:
         payload["updateTime"] = int(time.time() * 1000)
         payload = to_app_types(payload)
 
-        logger.debug(f"Device {self.id}: Preparing '0006' (TOGGLE_PROPERTY) command with payload: {payload}")
+        logger.debug("Device %s: Preparing '0006' (TOGGLE_PROPERTY) command with payload: %s", self.id, redact(payload))
         # The session will use HomismartCommandBuilder.build_toggle_property_message(payload)
         # and then send it using the client.
         await self._session._send_command_for_device(
@@ -269,7 +268,7 @@ class HomismartDevice:
         payload["lock"] = lock_status if lock_status is not None else self._raw_data.get("lock", "1")
         payload["iconId"] = icon_id if icon_id is not None else self.icon_id if self.icon_id is not None else "0"
 
-        logger.debug(f"Device {self.id}: Preparing '0016' (MODIFY_DEVICE) command with payload: {payload}")
+        logger.debug("Device %s: Preparing '0016' (MODIFY_DEVICE) command with payload: %s", self.id, redact(payload))
         # The session will use HomismartCommandBuilder.build_modify_device_message(...)
         # and then send it using the client.
         await self._session._send_command_for_device(
@@ -283,7 +282,7 @@ class HomismartDevice:
         if not name or not isinstance(name, str):
             logger.error(f"Device {self.id}: Invalid name provided for set_name: '{name}'")
             raise ValueError("Device name must be a non-empty string.")
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to set name to '{name}'.")
+        logger.debug(f"Device {self.id}: Attempting to set a new name.")
         await self._execute_modify_command(name=name)
 
     async def set_icon(self, icon_id: str) -> None:
@@ -292,7 +291,7 @@ class HomismartDevice:
         if not isinstance(icon_id, str):
             logger.error(f"Device {self.id}: Invalid icon_id provided for set_icon: '{icon_id}'")
             raise ValueError("Icon ID must be a string.")
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to set icon ID to '{icon_id}'.")
+        logger.debug(f"Device {self.id}: Attempting to set icon ID to '{icon_id}'.")
         await self._execute_modify_command(icon_id=icon_id)
 
     async def set_led_state(self, led_percentage: int) -> None:
@@ -304,7 +303,7 @@ class HomismartDevice:
             raise ValueError("LED percentage must be between 0 and 100.")
 
         logger.info(
-            f"Device {self.id} ('{self.name}'): Attempting to set LED state to {led_percentage}%."
+            f"Device {self.id}: Attempting to set LED state to {led_percentage}%."
         )
 
         led_payload = {"devid": self.id, "ledDevice": led_percentage}
@@ -318,7 +317,7 @@ class HomismartDevice:
         """
         Deletes the device from the account. This uses the "0014" DELETE_DEVICE command.
         """
-        logger.info(f"Device {self.id} ('{self.name}'): Attempting to delete.")
+        logger.debug(f"Device {self.id}: Attempting to delete.")
         # Payload for "0014" is {"devid": self.id}
         delete_payload = {"devid": self.id}
         await self._session._send_command_for_device(

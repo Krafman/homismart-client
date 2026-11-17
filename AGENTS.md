@@ -21,6 +21,16 @@ diagnostics. Credentials for live tests live in git-ignored `.env` files only.
 IDs. Names can't be checked automatically, so review every new string yourself
 before committing.
 
+## Never log credentials or personal data
+
+Logs end up in bug reports. Never log a password, its MD5 hash (the server
+accepts the hash as the password), usernames/emails, tokens or people's names,
+at any level. Pass every payload, server message or device dict through
+`homismart_client.utils.redact()` (or `redact_message()` for raw messages)
+before logging or exporting it (diagnostics included), and don't log event
+arguments. `tests/test_logging.py` in the client fails if a secret reaches the
+log during a full session; extend it when adding new message types.
+
 ## Releases and CI cost
 
 - CI runs on pull requests and on pushes to `main` only. Batch changes and
